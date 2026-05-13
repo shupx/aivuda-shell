@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("aivudaShell", {
   getStartup: () => ipcRenderer.invoke("aivuda-shell:get-startup"),
   prepareWindowRecording: () => ipcRenderer.invoke("aivuda-shell:prepare-window-recording"),
   startFfmpegWindowRecording: () => ipcRenderer.invoke("aivuda-shell:start-ffmpeg-window-recording"),
+  startFfmpegX11Recording: () => ipcRenderer.invoke("aivuda-shell:start-ffmpeg-x11-recording"),
   pauseFfmpegWindowRecording: () => ipcRenderer.invoke("aivuda-shell:pause-ffmpeg-window-recording"),
   resumeFfmpegWindowRecording: () => ipcRenderer.invoke("aivuda-shell:resume-ffmpeg-window-recording"),
   saveShellState: (state) => ipcRenderer.invoke("aivuda-shell:save-shell-state", state),

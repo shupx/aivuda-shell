@@ -52,7 +52,12 @@ function normalizeSavedShellState(rawState) {
   const chromeExpanded = rawState.chromeExpanded === true;
   const performanceOverlayVisible = rawState.performanceOverlayVisible === true;
   const screenRecordBarVisible = rawState.screenRecordBarVisible === true;
-  const screenRecordMode = rawState.screenRecordMode === "native" ? "native" : "ffmpeg";
+  const screenRecordMode =
+    rawState.screenRecordMode === "native"
+      ? "native"
+      : rawState.screenRecordMode === "ffmpeg-x11"
+        ? "ffmpeg-x11"
+        : "ffmpeg";
   const screenRecordBarPosition =
     rawState.screenRecordBarPosition &&
     Number.isFinite(rawState.screenRecordBarPosition.left) &&
@@ -599,8 +604,9 @@ function renderScreenRecordBar() {
       ? [
           '<div style="margin-top:2px;padding:4px 6px 2px;border-top:1px solid rgba(148,163,184,0.35);border-radius:8px;background:rgba(255,255,255,0.2);max-width:300px;overflow-wrap:anywhere;">',
           '<div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;font-size:10px;">',
-          `<button type="button" data-screen-record-mode="native" title="Use native browser recording" style="border:0;border-radius:999px;padding:1px 6px;background:${screenRecordMode === "native" ? "rgba(148,163,184,0.24)" : "transparent"};color:#334e68;font:inherit;cursor:${screenRecordStatus === "idle" || screenRecordStatus === "saved" || screenRecordStatus === "error" ? "pointer" : "not-allowed"};">Native</button>`,
-          `<button type="button" data-screen-record-mode="ffmpeg" title="Use FFmpeg recording" style="border:0;border-radius:999px;padding:1px 6px;background:${screenRecordMode === "ffmpeg" ? "rgba(148,163,184,0.24)" : "transparent"};color:#334e68;font:inherit;cursor:${screenRecordStatus === "idle" || screenRecordStatus === "saved" || screenRecordStatus === "error" ? "pointer" : "not-allowed"};">FFmpeg</button>`,
+          `<button type="button" data-screen-record-mode="native" style="border:0;border-radius:999px;padding:1px 6px;background:${screenRecordMode === "native" ? "rgba(148,163,184,0.24)" : "transparent"};color:#334e68;font:inherit;cursor:${screenRecordStatus === "idle" || screenRecordStatus === "saved" || screenRecordStatus === "error" ? "pointer" : "not-allowed"};">Native</button>`,
+          `<button type="button" data-screen-record-mode="ffmpeg" style="border:0;border-radius:999px;padding:1px 6px;background:${screenRecordMode === "ffmpeg" ? "rgba(148,163,184,0.24)" : "transparent"};color:#334e68;font:inherit;cursor:${screenRecordStatus === "idle" || screenRecordStatus === "saved" || screenRecordStatus === "error" ? "pointer" : "not-allowed"};">FFmpeg</button>`,
+          `<button type="button" data-screen-record-mode="ffmpeg-x11" style="border:0;border-radius:999px;padding:1px 6px;background:${screenRecordMode === "ffmpeg-x11" ? "rgba(148,163,184,0.24)" : "transparent"};color:#334e68;font:inherit;cursor:${screenRecordStatus === "idle" || screenRecordStatus === "saved" || screenRecordStatus === "error" ? "pointer" : "not-allowed"};">FFmpeg X11</button>`,
           "</div>",
           `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:${statusTone};">${screenRecordStatus}</div>`,
           `<div style="margin-top:2px;font-size:11px;color:#334e68;">${screenRecordStatusText || "No details"}</div>`,
@@ -618,6 +624,12 @@ function renderScreenRecordBar() {
   const stopButton = screenRecordBarEl.querySelector("[data-stop-screen-record]");
   const expandButton = screenRecordBarEl.querySelector("[data-expand-screen-record]");
   const modeButtons = screenRecordBarEl.querySelectorAll("[data-screen-record-mode]");
+  const modeButtonTitles = {
+    native: "Native\nDoes not require installing FFmpeg\nRecorded files are usually larger\nOutput format: WebM",
+    ffmpeg: "FFmpeg\nSmaller output files\nSomewhat higher CPU usage\nCaptures only this window",
+    "ffmpeg-x11":
+      "FFmpeg X11\nCaptures a fixed screen region matching this window's initial size\nDoes not follow window moves\nCan record content outside the window",
+  };
 
   if (closeButton) {
     closeButton.addEventListener("click", () => {
@@ -672,11 +684,18 @@ function renderScreenRecordBar() {
   }
 
   for (const modeButton of modeButtons) {
+    modeButton.title = modeButtonTitles[modeButton.dataset.screenRecordMode] || "";
     modeButton.addEventListener("click", () => {
       if (!(screenRecordStatus === "idle" || screenRecordStatus === "saved" || screenRecordStatus === "error")) {
         return;
       }
-      screenRecordMode = modeButton.dataset.screenRecordMode === "ffmpeg" ? "ffmpeg" : "native";
+      if (modeButton.dataset.screenRecordMode === "native") {
+        screenRecordMode = "native";
+      } else if (modeButton.dataset.screenRecordMode === "ffmpeg-x11") {
+        screenRecordMode = "ffmpeg-x11";
+      } else {
+        screenRecordMode = "ffmpeg";
+      }
       writeShellState();
       renderScreenRecordBar();
     });
@@ -916,9 +935,12 @@ async function startScreenRecording() {
   renderScreenRecordBar();
   setScreenRecordState("idle", "Preparing window capture...");
 
-  if (screenRecordMode === "ffmpeg") {
+  if (screenRecordMode === "ffmpeg" || screenRecordMode === "ffmpeg-x11") {
     try {
-      const prepared = await window.aivudaShell.startFfmpegWindowRecording();
+      const prepared =
+        screenRecordMode === "ffmpeg-x11"
+          ? await window.aivudaShell.startFfmpegX11Recording()
+          : await window.aivudaShell.startFfmpegWindowRecording();
       if (!prepared?.ok || !prepared.outputPath) {
         throw new Error(prepared?.error || "Could not start FFmpeg window capture.");
       }

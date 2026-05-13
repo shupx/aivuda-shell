@@ -149,6 +149,24 @@ function normalizeFfmpegFrameSize(size) {
   };
 }
 
+function getWindowCaptureBounds(windowToRead = mainWindow) {
+  if (!windowToRead || windowToRead.isDestroyed()) {
+    return null;
+  }
+
+  const bounds = windowToRead.getBounds();
+  const displayInfo = screen.getDisplayMatching(bounds);
+  const scaleFactor = displayInfo?.scaleFactor || 1;
+
+  return {
+    width: Math.max(2, Math.round(bounds.width * scaleFactor)),
+    height: Math.max(2, Math.round(bounds.height * scaleFactor)),
+    offsetX: Math.round(bounds.x * scaleFactor),
+    offsetY: Math.round(bounds.y * scaleFactor),
+    display: process.env.DISPLAY || ":0.0",
+  };
+}
+
 function createFfmpegFrameBuffer(image, frameSize) {
   let frameImage = image;
   const imageSize = frameImage.getSize();
@@ -813,6 +831,107 @@ ipcMain.handle("aivuda-shell:start-ffmpeg-window-recording", async () => {
       width: firstSize.width,
       height: firstSize.height,
       frameRate,
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return {
+        ok: false,
+        error:
+          'FFmpeg is not installed. Run "sudo apt install ffmpeg -y" to install it, or switch the screen record bar mode to Native if you want to avoid installing FFmpeg at the cost of larger video files.',
+      };
+    }
+
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle("aivuda-shell:start-ffmpeg-x11-recording", async () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: "Main window is not available." };
+  }
+
+  if (!ensureFfmpegNotRunning()) {
+    return { ok: false, error: "FFmpeg recording is already running." };
+  }
+
+  if (!checkFfmpegAvailable()) {
+    await showMissingFfmpegDialog();
+    return {
+      ok: false,
+      error:
+        'FFmpeg is not installed. Run "sudo apt install ffmpeg -y" to install it, or switch the screen record bar mode to Native if you want to avoid installing FFmpeg at the cost of larger video files.',
+    };
+  }
+
+  const captureBounds = getWindowCaptureBounds(mainWindow);
+  if (!captureBounds) {
+    return { ok: false, error: "Could not resolve current window bounds for FFmpeg X11 capture." };
+  }
+
+  const outputPath = createFfmpegRecordingOutputPath();
+  const args = [
+    "-y",
+    "-hide_banner",
+    "-f",
+    "x11grab",
+    "-r",
+    "25",
+    "-s",
+    `${captureBounds.width}x${captureBounds.height}`,
+    "-i",
+    `${captureBounds.display}+${captureBounds.offsetX},${captureBounds.offsetY}`,
+    "-an",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "medium",
+    "-crf",
+    "24",
+    "-pix_fmt",
+    "yuv420p",
+    outputPath,
+  ];
+
+  try {
+    const child = spawn("ffmpeg", args, {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+
+    activeFfmpegRecording = {
+      process: child,
+      outputPath,
+      stderr: "",
+      paused: false,
+      stopping: false,
+      stopPromise: null,
+      width: captureBounds.width,
+      height: captureBounds.height,
+      frameRate: 25,
+      captureTimer: null,
+      captureInFlight: false,
+    };
+
+    child.stderr.on("data", (chunk) => {
+      if (activeFfmpegRecording?.process === child) {
+        activeFfmpegRecording.stderr = (activeFfmpegRecording.stderr || "") + chunk.toString();
+      }
+    });
+
+    child.once("error", (error) => {
+      activeFfmpegRecording = null;
+      if (error.code === "ENOENT") {
+        return;
+      }
+    });
+
+    if (child.pid == null) {
+      throw new Error("FFmpeg X11 did not start correctly.");
+    }
+
+    return {
+      ok: true,
+      outputPath,
+      recordingsDir: path.dirname(outputPath),
     };
   } catch (error) {
     if (error.code === "ENOENT") {
