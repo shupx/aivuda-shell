@@ -14,6 +14,8 @@ let defaultUrl = "http://127.0.0.1:80";
 let activeTabId = null;
 let nextTabId = 1;
 const tabs = new Map();
+const guestPreloadUrl = new URL("guest-preload.js", window.location.href).toString();
+const offlineUrl = new URL("offline.html", window.location.href).toString();
 
 function setChromeExpanded(isExpanded) {
   shellEl.classList.toggle("expanded", isExpanded);
@@ -107,7 +109,6 @@ async function injectPerformanceOverlay(tab, action) {
   }
 
   const gpuStatus = await window.aivudaShell.getGpuStatus().catch(() => ({}));
-  const offlineUrl = new URL("offline.html", window.location.href).toString();
 
   tab.webview.executeJavaScript(
     `
@@ -268,6 +269,7 @@ function createTab(rawUrl) {
   const webview = document.createElement("webview");
   webview.src = url;
   webview.setAttribute("partition", "persist:aivuda-shell");
+  webview.setAttribute("preload", guestPreloadUrl);
 
   const tab = {
     id,
@@ -284,6 +286,17 @@ function createTab(rawUrl) {
   webview.addEventListener("dom-ready", () => {
     if (typeof webview.getWebContentsId === "function") {
       window.aivudaShell.registerWebview(webview.getWebContentsId());
+    }
+  });
+
+  webview.addEventListener("ipc-message", (event) => {
+    if (event.channel !== "aivuda-shell:open-url-in-new-tab") {
+      return;
+    }
+
+    const [nextUrl] = event.args;
+    if (typeof nextUrl === "string" && nextUrl.trim()) {
+      createTab(nextUrl);
     }
   });
 
@@ -329,11 +342,6 @@ function createTab(rawUrl) {
     });
     webview.src = `${offlineUrl}?${params.toString()}`;
   });
-
-  webview.addEventListener("new-window", (event) => {
-    createTab(event.url);
-  });
-
   activateTab(id);
 }
 

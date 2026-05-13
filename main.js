@@ -47,6 +47,14 @@ function resolveInitialUrl() {
   return getUrlFromArgs(process.argv) || normalizeUrl(process.env.AIVUDA_SHELL_URL) || DEFAULT_URL;
 }
 
+function shouldBypassCertificateValidation(rawUrl) {
+  try {
+    return new URL(rawUrl).protocol === "https:";
+  } catch (_error) {
+    return false;
+  }
+}
+
 function sendToShell(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
@@ -185,6 +193,21 @@ ipcMain.on("aivuda-shell:register-webview", (_event, guestInstanceId) => {
 });
 
 app.whenReady().then(() => {
+  app.on("certificate-error", (event, _webContents, requestUrl, error, certificate, callback) => {
+    if (!shouldBypassCertificateValidation(requestUrl)) {
+      return;
+    }
+
+    event.preventDefault();
+    console.warn(
+      "[aivuda-electron-shell] bypassing certificate validation for",
+      requestUrl,
+      `error=${error}`,
+      certificate?.issuerName ? `issuer=${certificate.issuerName}` : "",
+    );
+    callback(true);
+  });
+
   createMenu();
   createMainWindow();
 

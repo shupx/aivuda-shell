@@ -39,6 +39,10 @@ AIVUDA_SHELL_URL=http://127.0.0.1/panelhub/ui/ npm start
 
 If both are provided, the command-line URL wins over `AIVUDA_SHELL_URL`.
 
+## HTTPS Certificates
+
+For `https://` pages, the shell currently bypasses certificate validation errors and only logs a warning in the Electron process. This is intended for local/self-signed AivudaOS-style deployments where opening the page matters more than strict TLS verification.
+
 ## Tabs and Tools
 
 - `Ctrl+T`: open a new tab with the default AivudaOS URL.
@@ -47,6 +51,7 @@ If both are provided, the command-line URL wins over `AIVUDA_SHELL_URL`.
 - `Ctrl+L`: show the tab/address controls and focus the address bar.
 - `Esc`: hide the tab/address controls.
 - Use the address bar to navigate the active tab.
+- Links opened with `target="_blank"` or `window.open()` are routed into a new shell tab.
 - The `Tools` menu can show, hide, or toggle a draggable FPS/GPU overlay inside the active page.
 
 The tab/address controls are hidden by default. Use the small button in the top-right corner, the `View` menu, or `Ctrl+L` to expand them.
