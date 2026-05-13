@@ -1,7 +1,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn, spawnSync } = require("node:child_process");
 
-const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, screen, session, webContents } = require("electron");
+const { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, screen, session, webContents } = require("electron");
 
 const DEFAULT_URL = "http://127.0.0.1:80";
 const APP_ICON_PATH = path.join(__dirname, "assets", "aivuda_icon.png");
@@ -20,6 +21,7 @@ let shellStatePath = "";
 let latestShellState = null;
 let isClosingMainWindow = false;
 let isFinalShellStateSaveInProgress = false;
+let activeFfmpegRecording = null;
 
 function normalizeUrl(value) {
   if (!value || typeof value !== "string") {
@@ -97,6 +99,116 @@ function createRecordingOutputPath() {
   const recordingsDir = getRecordingsDir();
   fs.mkdirSync(recordingsDir, { recursive: true });
   return path.join(recordingsDir, `aivuda-shell-${formatTimestampForFilename()}.webm`);
+}
+
+function createFfmpegRecordingOutputPath() {
+  const recordingsDir = getRecordingsDir();
+  fs.mkdirSync(recordingsDir, { recursive: true });
+  return path.join(recordingsDir, `aivuda-shell-${formatTimestampForFilename()}.mp4`);
+}
+
+function getWindowCaptureBounds(windowToRead = mainWindow) {
+  if (!windowToRead || windowToRead.isDestroyed()) {
+    return null;
+  }
+
+  const bounds = windowToRead.getBounds();
+  const displayInfo = screen.getDisplayMatching(bounds);
+  const scaleFactor = displayInfo?.scaleFactor || 1;
+
+  return {
+    width: Math.max(2, Math.round(bounds.width * scaleFactor)),
+    height: Math.max(2, Math.round(bounds.height * scaleFactor)),
+    offsetX: Math.round(bounds.x * scaleFactor),
+    offsetY: Math.round(bounds.y * scaleFactor),
+    display: process.env.DISPLAY || ":0.0",
+  };
+}
+
+function ensureFfmpegNotRunning() {
+  if (activeFfmpegRecording?.process && activeFfmpegRecording.process.exitCode == null && !activeFfmpegRecording.stopping) {
+    return false;
+  }
+
+  return true;
+}
+
+function checkFfmpegAvailable() {
+  const result = spawnSync("ffmpeg", ["-version"], {
+    stdio: "ignore",
+  });
+
+  if (result.error?.code === "ENOENT") {
+    return false;
+  }
+
+  return !result.error;
+}
+
+async function showMissingFfmpegDialog() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  await dialog.showMessageBox(mainWindow, {
+    type: "warning",
+    buttons: ["OK"],
+    defaultId: 0,
+    message: "FFmpeg is not installed.",
+    detail: 'Run "sudo apt install ffmpeg -y" to install it.',
+  });
+}
+
+function stopActiveFfmpegRecording() {
+  if (!activeFfmpegRecording) {
+    return Promise.resolve({ ok: true });
+  }
+
+  if (activeFfmpegRecording.stopPromise) {
+    return activeFfmpegRecording.stopPromise;
+  }
+
+  activeFfmpegRecording.stopping = true;
+  activeFfmpegRecording.stopPromise = new Promise((resolve) => {
+    const recording = activeFfmpegRecording;
+    const finalize = (result) => {
+      if (activeFfmpegRecording === recording) {
+        activeFfmpegRecording = null;
+      }
+      resolve(result);
+    };
+
+    recording.process.once("exit", (code, signal) => {
+      const stderr = (recording.stderr || "").trim();
+      const outputExists =
+        typeof recording.outputPath === "string" &&
+        recording.outputPath &&
+        fs.existsSync(recording.outputPath) &&
+        fs.statSync(recording.outputPath).size > 0;
+
+      if (code === 0 || signal === "SIGINT" || outputExists) {
+        finalize({
+          ok: true,
+          outputPath: recording.outputPath,
+          stderr,
+        });
+        return;
+      }
+
+      finalize({
+        ok: false,
+        error: stderr || `ffmpeg exited with code ${code == null ? "unknown" : code}`,
+      });
+    });
+
+    try {
+      recording.process.kill("SIGINT");
+    } catch (error) {
+      finalize({ ok: false, error: error.message });
+    }
+  });
+
+  return activeFfmpegRecording.stopPromise;
 }
 
 function readShellState() {
@@ -209,6 +321,11 @@ async function saveFinalShellStateBeforeClose(windowToClose) {
 }
 
 async function finalizeActiveRecordingBeforeClose(windowToClose) {
+  const ffmpegResult = await stopActiveFfmpegRecording();
+  if (!ffmpegResult?.ok) {
+    return ffmpegResult;
+  }
+
   if (!windowToClose || windowToClose.isDestroyed()) {
     return { ok: true };
   }
@@ -480,6 +597,142 @@ ipcMain.handle("aivuda-shell:save-recording-file", async (_event, payload) => {
     console.error("[aivuda-shell] failed to save recording file", error);
     return { ok: false, error: error.message };
   }
+});
+
+ipcMain.handle("aivuda-shell:start-ffmpeg-window-recording", async () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: "Main window is not available." };
+  }
+
+  if (!ensureFfmpegNotRunning()) {
+    return { ok: false, error: "FFmpeg recording is already running." };
+  }
+
+  if (!checkFfmpegAvailable()) {
+    await showMissingFfmpegDialog();
+    return {
+      ok: false,
+      error: 'FFmpeg is not installed. Run "sudo apt install ffmpeg -y" to install it.',
+    };
+  }
+
+  const captureBounds = getWindowCaptureBounds(mainWindow);
+  if (!captureBounds) {
+    return { ok: false, error: "Could not resolve current window bounds for FFmpeg capture." };
+  }
+
+  const outputPath = createFfmpegRecordingOutputPath();
+  const args = [
+    "-y",
+    "-hide_banner",
+    "-f",
+    "x11grab",
+    "-r",
+    "25",
+    "-s",
+    `${captureBounds.width}x${captureBounds.height}`,
+    "-i",
+    `${captureBounds.display}+${captureBounds.offsetX},${captureBounds.offsetY}`,
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    outputPath,
+  ];
+
+  try {
+    const child = spawn("ffmpeg", args, {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.once("error", (error) => {
+      if (error.code === "ENOENT") {
+        activeFfmpegRecording = null;
+      }
+    });
+
+    activeFfmpegRecording = {
+      process: child,
+      outputPath,
+      stderr,
+      paused: false,
+      stopping: false,
+      stopPromise: null,
+    };
+
+    child.stderr.on("data", (chunk) => {
+      if (activeFfmpegRecording?.process === child) {
+        activeFfmpegRecording.stderr = (activeFfmpegRecording.stderr || "") + chunk.toString();
+      }
+    });
+
+    child.once("error", (error) => {
+      activeFfmpegRecording = null;
+      if (error.code === "ENOENT") {
+        return;
+      }
+    });
+
+    if (child.pid == null) {
+      throw new Error("FFmpeg did not start correctly.");
+    }
+
+    return {
+      ok: true,
+      outputPath,
+      recordingsDir: path.dirname(outputPath),
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return {
+        ok: false,
+        error: 'FFmpeg is not installed. Run "sudo apt install ffmpeg -y" to install it.',
+      };
+    }
+
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle("aivuda-shell:pause-ffmpeg-window-recording", async () => {
+  if (!activeFfmpegRecording?.process || activeFfmpegRecording.process.exitCode != null) {
+    return { ok: false, error: "FFmpeg recording is not running." };
+  }
+
+  try {
+    activeFfmpegRecording.process.kill("SIGSTOP");
+    activeFfmpegRecording.paused = true;
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle("aivuda-shell:resume-ffmpeg-window-recording", async () => {
+  if (!activeFfmpegRecording?.process || activeFfmpegRecording.process.exitCode != null) {
+    return { ok: false, error: "FFmpeg recording is not running." };
+  }
+
+  try {
+    activeFfmpegRecording.process.kill("SIGCONT");
+    activeFfmpegRecording.paused = false;
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle("aivuda-shell:stop-ffmpeg-window-recording", async () => {
+  if (!activeFfmpegRecording) {
+    return { ok: true };
+  }
+
+  return stopActiveFfmpegRecording();
 });
 
 ipcMain.on("aivuda-shell:register-webview", (_event, guestInstanceId) => {
