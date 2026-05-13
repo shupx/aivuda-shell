@@ -107,24 +107,6 @@ function createFfmpegRecordingOutputPath() {
   return path.join(recordingsDir, `aivuda-shell-${formatTimestampForFilename()}.mp4`);
 }
 
-function getWindowCaptureBounds(windowToRead = mainWindow) {
-  if (!windowToRead || windowToRead.isDestroyed()) {
-    return null;
-  }
-
-  const bounds = windowToRead.getBounds();
-  const displayInfo = screen.getDisplayMatching(bounds);
-  const scaleFactor = displayInfo?.scaleFactor || 1;
-
-  return {
-    width: Math.max(2, Math.round(bounds.width * scaleFactor)),
-    height: Math.max(2, Math.round(bounds.height * scaleFactor)),
-    offsetX: Math.round(bounds.x * scaleFactor),
-    offsetY: Math.round(bounds.y * scaleFactor),
-    display: process.env.DISPLAY || ":0.0",
-  };
-}
-
 function ensureFfmpegNotRunning() {
   if (activeFfmpegRecording?.process && activeFfmpegRecording.process.exitCode == null && !activeFfmpegRecording.stopping) {
     return false;
@@ -159,6 +141,102 @@ async function showMissingFfmpegDialog() {
   });
 }
 
+function normalizeFfmpegFrameSize(size) {
+  return {
+    width: Math.max(2, Math.floor(size.width / 2) * 2),
+    height: Math.max(2, Math.floor(size.height / 2) * 2),
+  };
+}
+
+function createFfmpegFrameBuffer(image, frameSize) {
+  let frameImage = image;
+  const imageSize = frameImage.getSize();
+  if (imageSize.width !== frameSize.width || imageSize.height !== frameSize.height) {
+    frameImage = frameImage.resize({
+      width: frameSize.width,
+      height: frameSize.height,
+    });
+  }
+
+  const frameBuffer = frameImage.toBitmap();
+  const expectedFrameSize = frameSize.width * frameSize.height * 4;
+  if (frameBuffer.length !== expectedFrameSize) {
+    throw new Error(`Captured frame has ${frameBuffer.length} bytes, expected ${expectedFrameSize}.`);
+  }
+
+  return frameBuffer;
+}
+
+function scheduleNextFfmpegFrame(recording) {
+  if (!recording || recording.stopping) {
+    return;
+  }
+
+  const frameIntervalMs = Math.max(1, Math.round(1000 / recording.frameRate));
+  recording.captureTimer = setTimeout(async () => {
+    if (!activeFfmpegRecording || activeFfmpegRecording !== recording || recording.stopping) {
+      return;
+    }
+
+    if (recording.paused || recording.captureInFlight) {
+      scheduleNextFfmpegFrame(recording);
+      return;
+    }
+
+    recording.captureInFlight = true;
+    try {
+      const image = await mainWindow.webContents.capturePage();
+      const frameBuffer = createFfmpegFrameBuffer(image, recording);
+      if (recording.process.stdin && !recording.process.stdin.destroyed) {
+        const canWrite = recording.process.stdin.write(frameBuffer);
+        if (!canWrite) {
+          await new Promise((resolve, reject) => {
+            recording.process.stdin.once("drain", resolve);
+            recording.process.stdin.once("error", reject);
+          });
+        }
+      }
+    } catch (error) {
+      recording.stderr = `${recording.stderr || ""}\nframe-capture-error: ${error.message}`.trim();
+      recording.stopping = true;
+      if (recording.process.stdin && !recording.process.stdin.destroyed) {
+        recording.process.stdin.end();
+      }
+    } finally {
+      recording.captureInFlight = false;
+      if (recording.stopping) {
+        if (recording.process.stdin && !recording.process.stdin.destroyed) {
+          recording.process.stdin.end();
+        }
+        return;
+      }
+      scheduleNextFfmpegFrame(recording);
+    }
+  }, frameIntervalMs);
+}
+
+function buildFfmpegStopResult(recording, code, signal) {
+  const stderr = (recording.stderr || "").trim();
+  const outputExists =
+    typeof recording.outputPath === "string" &&
+    recording.outputPath &&
+    fs.existsSync(recording.outputPath) &&
+    fs.statSync(recording.outputPath).size > 0;
+
+  if (code === 0 || signal === "SIGINT" || signal === "SIGKILL" || outputExists) {
+    return {
+      ok: true,
+      outputPath: recording.outputPath,
+      stderr,
+    };
+  }
+
+  return {
+    ok: false,
+    error: stderr || `ffmpeg exited with code ${code == null ? "unknown" : code}`,
+  };
+}
+
 function stopActiveFfmpegRecording() {
   if (!activeFfmpegRecording) {
     return Promise.resolve({ ok: true });
@@ -169,40 +247,72 @@ function stopActiveFfmpegRecording() {
   }
 
   activeFfmpegRecording.stopping = true;
+  if (activeFfmpegRecording.captureTimer) {
+    clearTimeout(activeFfmpegRecording.captureTimer);
+    activeFfmpegRecording.captureTimer = null;
+  }
   activeFfmpegRecording.stopPromise = new Promise((resolve) => {
     const recording = activeFfmpegRecording;
+    let forcedKillTimer = null;
+    let failSafeTimer = null;
+    let didFinalize = false;
     const finalize = (result) => {
+      if (didFinalize) {
+        return;
+      }
+      didFinalize = true;
+      if (forcedKillTimer) {
+        clearTimeout(forcedKillTimer);
+      }
+      if (failSafeTimer) {
+        clearTimeout(failSafeTimer);
+      }
       if (activeFfmpegRecording === recording) {
         activeFfmpegRecording = null;
       }
       resolve(result);
     };
 
-    recording.process.once("exit", (code, signal) => {
-      const stderr = (recording.stderr || "").trim();
-      const outputExists =
-        typeof recording.outputPath === "string" &&
-        recording.outputPath &&
-        fs.existsSync(recording.outputPath) &&
-        fs.statSync(recording.outputPath).size > 0;
+    const finalizeFromProcessState = () => {
+      finalize(buildFfmpegStopResult(recording, recording.process.exitCode, recording.process.signalCode));
+    };
 
-      if (code === 0 || signal === "SIGINT" || outputExists) {
-        finalize({
-          ok: true,
-          outputPath: recording.outputPath,
-          stderr,
-        });
+    recording.process.once("exit", (code, signal) => {
+      finalize(buildFfmpegStopResult(recording, code, signal));
+    });
+
+    if (recording.process.exitCode != null || recording.process.signalCode != null) {
+      process.nextTick(finalizeFromProcessState);
+      return;
+    }
+
+    try {
+      failSafeTimer = setTimeout(finalizeFromProcessState, 9000);
+      forcedKillTimer = setTimeout(() => {
+        try {
+          if (recording.process.exitCode == null) {
+            recording.process.kill("SIGINT");
+          }
+        } catch (_error) {}
+
+        setTimeout(() => {
+          try {
+            if (recording.process.exitCode == null) {
+              recording.process.kill("SIGKILL");
+            }
+          } catch (_error) {}
+        }, 1500);
+      }, 4000);
+
+      if (recording.captureInFlight) {
         return;
       }
 
-      finalize({
-        ok: false,
-        error: stderr || `ffmpeg exited with code ${code == null ? "unknown" : code}`,
-      });
-    });
-
-    try {
-      recording.process.kill("SIGINT");
+      if (recording.process.stdin && !recording.process.stdin.destroyed) {
+        recording.process.stdin.end();
+      } else {
+        recording.process.kill("SIGINT");
+      }
     } catch (error) {
       finalize({ ok: false, error: error.message });
     }
@@ -616,25 +726,32 @@ ipcMain.handle("aivuda-shell:start-ffmpeg-window-recording", async () => {
     };
   }
 
-  const captureBounds = getWindowCaptureBounds(mainWindow);
-  if (!captureBounds) {
-    return { ok: false, error: "Could not resolve current window bounds for FFmpeg capture." };
-  }
-
   const outputPath = createFfmpegRecordingOutputPath();
+  const firstImage = await mainWindow.webContents.capturePage().catch((error) => {
+    throw error;
+  });
+  const firstSize = normalizeFfmpegFrameSize(firstImage.getSize());
+  const frameRate = 25;
   const args = [
     "-y",
     "-hide_banner",
     "-f",
-    "x11grab",
+    "rawvideo",
     "-r",
-    "25",
+    String(frameRate),
+    "-pix_fmt",
+    "bgra",
     "-s",
-    `${captureBounds.width}x${captureBounds.height}`,
+    `${firstSize.width}x${firstSize.height}`,
     "-i",
-    `${captureBounds.display}+${captureBounds.offsetX},${captureBounds.offsetY}`,
+    "-",
+    "-an",
     "-c:v",
     "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "23",
     "-pix_fmt",
     "yuv420p",
     outputPath,
@@ -642,27 +759,21 @@ ipcMain.handle("aivuda-shell:start-ffmpeg-window-recording", async () => {
 
   try {
     const child = spawn("ffmpeg", args, {
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.once("error", (error) => {
-      if (error.code === "ENOENT") {
-        activeFfmpegRecording = null;
-      }
+      stdio: ["pipe", "ignore", "pipe"],
     });
 
     activeFfmpegRecording = {
       process: child,
       outputPath,
-      stderr,
+      stderr: "",
       paused: false,
       stopping: false,
       stopPromise: null,
+      width: firstSize.width,
+      height: firstSize.height,
+      frameRate,
+      captureTimer: null,
+      captureInFlight: false,
     };
 
     child.stderr.on("data", (chunk) => {
@@ -682,10 +793,24 @@ ipcMain.handle("aivuda-shell:start-ffmpeg-window-recording", async () => {
       throw new Error("FFmpeg did not start correctly.");
     }
 
+    const firstFrameBuffer = createFfmpegFrameBuffer(firstImage, firstSize);
+    const canWrite = child.stdin.write(firstFrameBuffer);
+    if (!canWrite) {
+      await new Promise((resolve, reject) => {
+        child.stdin.once("drain", resolve);
+        child.stdin.once("error", reject);
+      });
+    }
+
+    scheduleNextFfmpegFrame(activeFfmpegRecording);
+
     return {
       ok: true,
       outputPath,
       recordingsDir: path.dirname(outputPath),
+      width: firstSize.width,
+      height: firstSize.height,
+      frameRate,
     };
   } catch (error) {
     if (error.code === "ENOENT") {
@@ -704,13 +829,8 @@ ipcMain.handle("aivuda-shell:pause-ffmpeg-window-recording", async () => {
     return { ok: false, error: "FFmpeg recording is not running." };
   }
 
-  try {
-    activeFfmpegRecording.process.kill("SIGSTOP");
-    activeFfmpegRecording.paused = true;
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
+  activeFfmpegRecording.paused = true;
+  return { ok: true };
 });
 
 ipcMain.handle("aivuda-shell:resume-ffmpeg-window-recording", async () => {
@@ -718,13 +838,8 @@ ipcMain.handle("aivuda-shell:resume-ffmpeg-window-recording", async () => {
     return { ok: false, error: "FFmpeg recording is not running." };
   }
 
-  try {
-    activeFfmpegRecording.process.kill("SIGCONT");
-    activeFfmpegRecording.paused = false;
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
+  activeFfmpegRecording.paused = false;
+  return { ok: true };
 });
 
 ipcMain.handle("aivuda-shell:stop-ffmpeg-window-recording", async () => {
