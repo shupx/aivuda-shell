@@ -1,6 +1,6 @@
 # AivudaOS Electron Shell
 
-This package provides a desktop shell for opening AivudaOS and AivudaOS-hosted app panels in a dedicated Electron window on Ubuntu and other Linux desktops.
+This package provides a desktop shell for opening [AivudaOS](https://github.com/shupx/aivudaOS) and AivudaOS-hosted app panels in a dedicated Electron window on Ubuntu and other Linux desktops.
 
 It does not install or start AivudaOS itself. Start your AivudaOS services first, then launch the shell.
 
@@ -8,10 +8,10 @@ It does not install or start AivudaOS itself. Start your AivudaOS services first
 
 ## Install
 
-Global install:
+Global install and update with:
 
 ```bash
-npm install -g @aivuda/aivuda-shell
+npm install -g @aivuda/aivuda-shell@latest
 ```
 
 One-off run without installing globally:
