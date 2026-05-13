@@ -13,6 +13,21 @@ let defaultUrl = "http://127.0.0.1:80";
 let activeTabId = null;
 let nextTabId = 1;
 let performanceOverlayVisible = false;
+let screenRecordBarVisible = false;
+let screenRecordBarPosition = null;
+let screenRecordBarEl = null;
+let screenRecordStatus = "idle";
+let screenRecordStatusText = "Ready to record";
+let screenRecordElapsedMs = 0;
+let screenRecordStartedAt = 0;
+let screenRecordTimer = 0;
+let screenRecorder = null;
+let screenRecorderStream = null;
+let screenRecorderChunks = [];
+let screenRecorderOutputPath = "";
+let screenRecorderOutputDir = "";
+let screenRecorderLastSavedPath = "";
+let isStoppingScreenRecorder = false;
 const tabs = new Map();
 const guestPreloadUrl = new URL("guest-preload.js", window.location.href).toString();
 const offlineUrl = new URL("offline.html", window.location.href).toString();
@@ -30,12 +45,24 @@ function normalizeSavedShellState(rawState) {
   const activeTabId = typeof rawState.activeTabId === "string" ? rawState.activeTabId : null;
   const chromeExpanded = rawState.chromeExpanded === true;
   const performanceOverlayVisible = rawState.performanceOverlayVisible === true;
+  const screenRecordBarVisible = rawState.screenRecordBarVisible === true;
+  const screenRecordBarPosition =
+    rawState.screenRecordBarPosition &&
+    Number.isFinite(rawState.screenRecordBarPosition.left) &&
+    Number.isFinite(rawState.screenRecordBarPosition.top)
+      ? {
+          left: rawState.screenRecordBarPosition.left,
+          top: rawState.screenRecordBarPosition.top,
+        }
+      : null;
 
   return {
     tabs,
     activeTabId,
     chromeExpanded,
     performanceOverlayVisible,
+    screenRecordBarVisible,
+    screenRecordBarPosition,
   };
 }
 
@@ -44,6 +71,8 @@ function buildShellStatePayload() {
     activeTabId,
     chromeExpanded: shellEl.classList.contains("expanded"),
     performanceOverlayVisible,
+    screenRecordBarVisible,
+    screenRecordBarPosition,
     tabs: Array.from(tabs.values()).map((tab) => ({
       id: tab.id,
       title: tab.title,
@@ -353,6 +382,374 @@ async function injectPerformanceOverlay(tab, action) {
   });
 }
 
+function formatElapsedTime(elapsedMs) {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (value) => String(value).padStart(2, "0");
+  return hours > 0 ? `${pad(hours)}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
+}
+
+function setScreenRecordBarPosition(position) {
+  if (
+    position &&
+    Number.isFinite(position.left) &&
+    Number.isFinite(position.top) &&
+    (!screenRecordBarPosition ||
+      screenRecordBarPosition.left !== position.left ||
+      screenRecordBarPosition.top !== position.top)
+  ) {
+    screenRecordBarPosition = {
+      left: position.left,
+      top: position.top,
+    };
+    writeShellState();
+  }
+}
+
+function setScreenRecordBarVisible(isVisible) {
+  if (screenRecordBarVisible === isVisible) {
+    return;
+  }
+
+  screenRecordBarVisible = isVisible;
+  writeShellState();
+}
+
+function setScreenRecordState(nextStatus, nextText) {
+  screenRecordStatus = nextStatus;
+  if (typeof nextText === "string") {
+    screenRecordStatusText = nextText;
+  }
+  renderScreenRecordBar();
+}
+
+function stopScreenRecordTimer() {
+  if (screenRecordTimer) {
+    window.clearInterval(screenRecordTimer);
+    screenRecordTimer = 0;
+  }
+}
+
+function startScreenRecordTimer() {
+  stopScreenRecordTimer();
+  screenRecordTimer = window.setInterval(() => {
+    if (screenRecordStatus !== "recording") {
+      stopScreenRecordTimer();
+      return;
+    }
+    screenRecordElapsedMs = Date.now() - screenRecordStartedAt;
+    renderScreenRecordBar();
+  }, 250);
+}
+
+function cleanupScreenRecorderStream() {
+  if (screenRecorderStream) {
+    for (const track of screenRecorderStream.getTracks()) {
+      track.stop();
+    }
+  }
+  screenRecorderStream = null;
+}
+
+function canCloseScreenRecordBar() {
+  return screenRecordStatus !== "recording" && screenRecordStatus !== "stopping";
+}
+
+function updateScreenRecordBarLayout() {
+  if (!screenRecordBarEl) {
+    return;
+  }
+
+  if (screenRecordBarPosition) {
+    screenRecordBarEl.style.left = `${screenRecordBarPosition.left}px`;
+    screenRecordBarEl.style.top = `${screenRecordBarPosition.top}px`;
+    screenRecordBarEl.style.right = "auto";
+  }
+}
+
+function renderScreenRecordBar() {
+  if (!screenRecordBarVisible) {
+    if (screenRecordBarEl) {
+      screenRecordBarEl.remove();
+      screenRecordBarEl = null;
+    }
+    return;
+  }
+
+  if (!screenRecordBarEl) {
+    const bar = document.createElement("div");
+    bar.id = "aivuda-screen-record-bar";
+    bar.style.cssText = [
+      "position:fixed",
+      "right:16px",
+      "bottom:16px",
+      "z-index:2147483647",
+      "min-width:240px",
+      "max-width:300px",
+      "padding:10px 12px",
+      "border:1px solid rgba(148,163,184,0.42)",
+      "border-radius:10px",
+      "background:rgba(255,255,255,0.76)",
+      "color:#102a43",
+      "font:12px/1.35 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+      "box-shadow:0 12px 32px rgba(15,23,42,0.18)",
+      "backdrop-filter:blur(10px)",
+      "user-select:none"
+    ].join(";");
+
+    let drag = null;
+    bar.addEventListener("pointerdown", (event) => {
+      if (event.target instanceof HTMLButtonElement) {
+        return;
+      }
+
+      const rect = bar.getBoundingClientRect();
+      drag = {
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+      };
+      bar.setPointerCapture(event.pointerId);
+    });
+
+    bar.addEventListener("pointermove", (event) => {
+      if (!drag) {
+        return;
+      }
+
+      const nextLeft = Math.max(0, Math.min(window.innerWidth - bar.offsetWidth, event.clientX - drag.offsetX));
+      const nextTop = Math.max(0, Math.min(window.innerHeight - bar.offsetHeight, event.clientY - drag.offsetY));
+      bar.style.left = `${nextLeft}px`;
+      bar.style.top = `${nextTop}px`;
+      bar.style.right = "auto";
+      bar.style.bottom = "auto";
+    });
+
+    const finishDrag = () => {
+      if (!drag) {
+        return;
+      }
+      drag = null;
+      const rect = bar.getBoundingClientRect();
+      setScreenRecordBarPosition({ left: rect.left, top: rect.top });
+    };
+
+    bar.addEventListener("pointerup", finishDrag);
+    bar.addEventListener("pointercancel", finishDrag);
+
+    document.body.appendChild(bar);
+    screenRecordBarEl = bar;
+    updateScreenRecordBarLayout();
+  }
+
+  const isRecording = screenRecordStatus === "recording";
+  const isBusy = screenRecordStatus === "stopping";
+  const elapsedText = formatElapsedTime(screenRecordElapsedMs);
+  const statusTone = screenRecordStatus === "error" ? "#b42318" : isRecording ? "#b42318" : "#486581";
+
+  screenRecordBarEl.innerHTML = [
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:move;">',
+    '<div style="display:flex;align-items:center;gap:8px;min-width:0;">',
+    `<span style="display:inline-block;width:10px;height:10px;border-radius:999px;background:${isRecording ? "#d92d20" : "#98a2b3"};box-shadow:${isRecording ? "0 0 0 4px rgba(217,45,32,0.16)" : "none"};"></span>`,
+    '<span style="font-weight:700;">Screen Record</span>',
+    "</div>",
+    `<button type="button" data-close-screen-record title="Hide" style="width:24px;height:24px;border:0;border-radius:6px;background:transparent;color:${canCloseScreenRecordBar() ? "#52606d" : "#cbd5e1"};font:inherit;line-height:1;cursor:${canCloseScreenRecordBar() ? "pointer" : "not-allowed"};">×</button>`,
+    "</div>",
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;">',
+    `<div style="font-variant-numeric:tabular-nums;font-weight:700;color:${isRecording ? "#b42318" : "#102a43"};">${elapsedText}</div>`,
+    `<button type="button" data-toggle-screen-record style="min-width:88px;height:30px;padding:0 12px;border:0;border-radius:999px;background:${isRecording ? "#b42318" : "#1769aa"};color:#fff;font:inherit;font-weight:700;cursor:${isBusy ? "wait" : "pointer"};opacity:${isBusy ? "0.75" : "1"};">${isRecording ? "Stop" : isBusy ? "Saving..." : "Start"}</button>`,
+    "</div>",
+    `<div style="margin-top:8px;min-height:16px;color:${statusTone};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${screenRecordStatusText}</div>`,
+  ].join("");
+
+  const closeButton = screenRecordBarEl.querySelector("[data-close-screen-record]");
+  const toggleButton = screenRecordBarEl.querySelector("[data-toggle-screen-record]");
+
+  closeButton.addEventListener("click", () => {
+    if (!canCloseScreenRecordBar()) {
+      return;
+    }
+
+    setScreenRecordBarVisible(false);
+    renderScreenRecordBar();
+  });
+
+  toggleButton.disabled = isBusy;
+  toggleButton.addEventListener("click", () => {
+    if (isBusy) {
+      return;
+    }
+
+    if (screenRecordStatus === "recording") {
+      stopScreenRecording();
+      return;
+    }
+
+    startScreenRecording();
+  });
+}
+
+async function stopScreenRecording() {
+  if (!screenRecorder || isStoppingScreenRecorder || screenRecordStatus !== "recording") {
+    return;
+  }
+
+  isStoppingScreenRecorder = true;
+  stopScreenRecordTimer();
+  screenRecordElapsedMs = Date.now() - screenRecordStartedAt;
+  setScreenRecordState("stopping", "Saving recording...");
+
+  await new Promise((resolve) => {
+    const finalize = () => resolve();
+    screenRecorder.addEventListener("stop", finalize, { once: true });
+    try {
+      screenRecorder.stop();
+    } catch (_error) {
+      resolve();
+    }
+  });
+
+  isStoppingScreenRecorder = false;
+}
+
+async function finalizeScreenRecording() {
+  try {
+    const blob = new Blob(screenRecorderChunks, { type: screenRecorder?.mimeType || "video/webm" });
+    const arrayBuffer = await blob.arrayBuffer();
+    const response = await window.aivudaShell.saveRecordingFile({
+      outputPath: screenRecorderOutputPath,
+      buffer: Array.from(new Uint8Array(arrayBuffer)),
+    });
+
+    if (!response?.ok) {
+      throw new Error(response?.error || "Failed to save recording.");
+    }
+
+    screenRecorderLastSavedPath = response.outputPath;
+    setScreenRecordState("idle", `Saved to ${response.outputPath}`);
+  } catch (error) {
+    setScreenRecordState("error", `Record save failed: ${error.message}`);
+  } finally {
+    screenRecorder = null;
+    screenRecorderChunks = [];
+    cleanupScreenRecorderStream();
+    screenRecorderOutputPath = "";
+    screenRecorderOutputDir = "";
+    screenRecordStartedAt = 0;
+    screenRecordElapsedMs = 0;
+    renderScreenRecordBar();
+  }
+}
+
+function chooseScreenRecordingMimeType() {
+  const candidates = [
+    "video/webm;codecs=vp9",
+    "video/webm;codecs=vp8",
+    "video/webm",
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof MediaRecorder.isTypeSupported !== "function" || MediaRecorder.isTypeSupported(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
+async function startScreenRecording() {
+  if (screenRecordStatus === "recording" || screenRecordStatus === "stopping") {
+    return;
+  }
+
+  setScreenRecordBarVisible(true);
+  renderScreenRecordBar();
+  setScreenRecordState("idle", "Preparing window capture...");
+
+  try {
+    const prepared = await window.aivudaShell.prepareWindowRecording();
+    if (!prepared?.ok || !prepared.sourceId || !prepared.outputPath) {
+      throw new Error(prepared?.error || "Could not prepare window capture.");
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: {
+          chromeMediaSource: "desktop",
+          chromeMediaSourceId: prepared.sourceId,
+        },
+      },
+    });
+
+    const mimeType = chooseScreenRecordingMimeType();
+    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+
+    screenRecorderChunks = [];
+    screenRecorder = recorder;
+    screenRecorderStream = stream;
+    screenRecorderOutputPath = prepared.outputPath;
+    screenRecorderOutputDir = prepared.recordingsDir || "";
+    screenRecordStartedAt = Date.now();
+    screenRecordElapsedMs = 0;
+
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data && event.data.size > 0) {
+        screenRecorderChunks.push(event.data);
+      }
+    });
+
+    recorder.addEventListener("stop", () => {
+      finalizeScreenRecording();
+    });
+
+    recorder.addEventListener("error", (event) => {
+      const message = event?.error?.message || "Recording failed.";
+      setScreenRecordState("error", `Record failed: ${message}`);
+      screenRecorder = null;
+      screenRecorderChunks = [];
+      cleanupScreenRecorderStream();
+      stopScreenRecordTimer();
+    });
+
+    for (const track of stream.getTracks()) {
+      track.addEventListener("ended", () => {
+        if (screenRecordStatus === "recording") {
+          stopScreenRecording();
+        }
+      });
+    }
+
+    recorder.start(1000);
+    startScreenRecordTimer();
+    setScreenRecordState("recording", `Saving to ${prepared.outputPath}`);
+  } catch (error) {
+    screenRecorder = null;
+    screenRecorderChunks = [];
+    cleanupScreenRecorderStream();
+    stopScreenRecordTimer();
+    screenRecordStartedAt = 0;
+    screenRecordElapsedMs = 0;
+    setScreenRecordState("error", `Record start failed: ${error.message}`);
+  }
+}
+
+function toggleScreenRecordBar() {
+  if (screenRecordBarVisible) {
+    if (!canCloseScreenRecordBar()) {
+      renderScreenRecordBar();
+      return;
+    }
+    setScreenRecordBarVisible(false);
+    renderScreenRecordBar();
+    return;
+  }
+
+  setScreenRecordBarVisible(true);
+  renderScreenRecordBar();
+}
+
 function createTab(rawUrl, options = {}) {
   const id = options.id || `tab-${nextTabId}`;
   const numericId = Number(String(id).replace(/^tab-/, ""));
@@ -588,6 +985,9 @@ window.aivudaShell.onTogglePerformanceOverlay(() => {
   setPerformanceOverlayVisible(!performanceOverlayVisible);
   syncPerformanceOverlayForActiveTab();
 });
+window.aivudaShell.onToggleScreenRecordBar(() => {
+  toggleScreenRecordBar();
+});
 window.aivudaShell.onClearBrowserData(async () => {
   await window.aivudaShell.clearBrowserData();
   window.location.reload();
@@ -595,6 +995,12 @@ window.aivudaShell.onClearBrowserData(async () => {
 
 window.addEventListener("pagehide", () => {
   writeShellState();
+});
+
+window.addEventListener("beforeunload", () => {
+  if (screenRecordStatus === "recording") {
+    stopScreenRecording();
+  }
 });
 
 window.setInterval(() => {
@@ -606,6 +1012,8 @@ window.aivudaShell.getStartup().then((startup) => {
   const savedState = normalizeSavedShellState(startup.savedState);
   if (savedState) {
     performanceOverlayVisible = savedState.performanceOverlayVisible;
+    screenRecordBarVisible = savedState.screenRecordBarVisible;
+    screenRecordBarPosition = savedState.screenRecordBarPosition;
     setChromeExpanded(savedState.chromeExpanded);
     const restoredTabs = savedState.tabs.length > 0 ? savedState.tabs : [{ url: startup.initialUrl || defaultUrl }];
     for (const tabState of restoredTabs) {
@@ -614,10 +1022,12 @@ window.aivudaShell.getStartup().then((startup) => {
     if (savedState.activeTabId && tabs.has(savedState.activeTabId)) {
       activateTab(savedState.activeTabId);
     }
+    renderScreenRecordBar();
     finishShellStateRestore();
     return;
   }
 
   createTab(startup.initialUrl || defaultUrl);
+  renderScreenRecordBar();
   finishShellStateRestore();
 });

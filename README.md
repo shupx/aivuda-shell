@@ -64,6 +64,7 @@ aivuda-shell-remove-desktop
 - Default URL: `http://127.0.0.1:80`
 - `https://` certificate errors are currently bypassed for local/self-signed deployments
 - `Tools -> Show FPS/GPU Overlay` displays the in-page performance overlay
+- `Tools -> Screen Record` shows a floating bar that can record the current Aivuda window to a local `.webm` file
 - `Tools -> Clear Browser Data` clears the persistent browser session data and saved shell state
 
 Developer-oriented setup notes live in `README_dev.md`.

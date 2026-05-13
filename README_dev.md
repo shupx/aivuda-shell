@@ -70,11 +70,14 @@ For `https://` pages, the shell currently bypasses certificate validation errors
 - Links opened with `target="_blank"` or `window.open()` are routed into a new shell tab.
 - The shell restores the previous tab list, active tab, top-bar expanded/collapsed state, and window size/position on the next launch.
 - The `Tools` menu can show the draggable FPS/GPU overlay inside the active page.
+- The `Tools` menu can show a draggable screen-record bar inside the shell and record the current Aivuda window to a `.webm` file.
 - `Tools -> Clear Browser Data` clears the persistent browser session data and the saved shell state.
 
 The Tab Bar is hidden by default. Use the menu bar `Tab Bar` item, the `View` menu, or `Ctrl+L` to toggle it.
 
 The FPS/GPU overlay is injected into the active webview page. It estimates FPS with `requestAnimationFrame`; GPU details are collapsed by default and can be expanded from the compact overlay.
+
+Screen recordings are saved automatically under `~/Videos/Aivuda Shell/` when the platform exposes a Videos directory, otherwise under the app user-data recordings directory.
 
 ## Default URL
 

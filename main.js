@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { app, BrowserWindow, ipcMain, Menu, screen, session, webContents } = require("electron");
+const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, screen, session, webContents } = require("electron");
 
 const DEFAULT_URL = "http://127.0.0.1:80";
 const APP_ICON_PATH = path.join(__dirname, "assets", "aivuda_icon.png");
@@ -71,6 +71,32 @@ function shouldBypassCertificateValidation(rawUrl) {
 
 function getShellStatePath() {
   return path.join(app.getPath("userData"), "shell-state.json");
+}
+
+function getRecordingsDir() {
+  try {
+    const videosPath = app.getPath("videos");
+    if (videosPath) {
+      return path.join(videosPath, "Aivuda Shell");
+    }
+  } catch (_error) {}
+
+  return path.join(app.getPath("userData"), "recordings");
+}
+
+function formatTimestampForFilename(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + "-" + [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join("-");
+}
+
+function createRecordingOutputPath() {
+  const recordingsDir = getRecordingsDir();
+  fs.mkdirSync(recordingsDir, { recursive: true });
+  return path.join(recordingsDir, `aivuda-shell-${formatTimestampForFilename()}.webm`);
 }
 
 function readShellState() {
@@ -267,6 +293,11 @@ function createMenu() {
           accelerator: "CmdOrCtrl+Shift+P",
           click: () => sendToShell("aivuda-shell:show-performance-overlay"),
         },
+        {
+          label: "Screen Record",
+          accelerator: "CmdOrCtrl+Shift+R",
+          click: () => sendToShell("aivuda-shell:toggle-screen-record-bar"),
+        },
         { type: "separator" },
         {
           label: "Clear Browser Data",
@@ -368,6 +399,62 @@ ipcMain.handle("aivuda-shell:save-shell-state", (_event, state) => {
     return { ok: true };
   } catch (error) {
     console.error("[aivuda-shell] failed to save shell state", error);
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle("aivuda-shell:prepare-window-recording", async () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: "Main window is not available." };
+  }
+
+  try {
+    const outputPath = createRecordingOutputPath();
+    const preferredSourceId = typeof mainWindow.getMediaSourceId === "function" ? mainWindow.getMediaSourceId() : "";
+    const sources = await desktopCapturer.getSources({
+      types: ["window"],
+      thumbnailSize: { width: 0, height: 0 },
+      fetchWindowIcons: false,
+    });
+
+    const source =
+      sources.find((entry) => preferredSourceId && entry.id === preferredSourceId) ||
+      sources.find((entry) => entry.name === mainWindow.getTitle()) ||
+      sources[0];
+
+    if (!source) {
+      return { ok: false, error: "No capturable window source was found." };
+    }
+
+    return {
+      ok: true,
+      sourceId: source.id,
+      outputPath,
+      recordingsDir: path.dirname(outputPath),
+    };
+  } catch (error) {
+    console.error("[aivuda-shell] failed to prepare window recording", error);
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle("aivuda-shell:save-recording-file", async (_event, payload) => {
+  const outputPath = payload?.outputPath;
+  const buffer = payload?.buffer;
+  if (typeof outputPath !== "string" || !outputPath.trim()) {
+    return { ok: false, error: "Missing recording output path." };
+  }
+
+  if (!buffer) {
+    return { ok: false, error: "Missing recording buffer." };
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, Buffer.from(buffer));
+    return { ok: true, outputPath };
+  } catch (error) {
+    console.error("[aivuda-shell] failed to save recording file", error);
     return { ok: false, error: error.message };
   }
 });
