@@ -1,6 +1,6 @@
 const path = require("node:path");
 
-const { app, BrowserWindow, ipcMain, Menu } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, webContents } = require("electron");
 
 const DEFAULT_URL = "http://127.0.0.1:80";
 
@@ -87,6 +87,16 @@ function createMenu() {
           click: () => sendToShell("aivuda-shell:reload-current-tab"),
         },
         {
+          label: "Show Tabs and Address Bar",
+          accelerator: "CmdOrCtrl+L",
+          click: () => sendToShell("aivuda-shell:show-browser-chrome"),
+        },
+        {
+          label: "Hide Tabs and Address Bar",
+          accelerator: "Escape",
+          click: () => sendToShell("aivuda-shell:hide-browser-chrome"),
+        },
+        {
           label: "Toggle Developer Tools",
           accelerator: process.platform === "darwin" ? "Alt+Command+I" : "Ctrl+Shift+I",
           click: () => sendToShell("aivuda-shell:toggle-devtools"),
@@ -145,6 +155,13 @@ function createMainWindow() {
     mainWindow = null;
   });
 
+  mainWindow.webContents.on("did-attach-webview", (_event, webContentsView) => {
+    webContentsView.setWindowOpenHandler(({ url }) => {
+      sendToShell("aivuda-shell:open-url-in-new-tab", { url });
+      return { action: "deny" };
+    });
+  });
+
   mainWindow.loadFile(path.join(__dirname, "shell.html"));
 }
 
@@ -152,6 +169,20 @@ ipcMain.handle("aivuda-shell:get-startup", () => ({
   defaultUrl: DEFAULT_URL,
   initialUrl,
 }));
+
+ipcMain.handle("aivuda-shell:get-gpu-status", () => app.getGPUFeatureStatus());
+
+ipcMain.on("aivuda-shell:register-webview", (_event, guestInstanceId) => {
+  const guest = webContents.fromId(Number(guestInstanceId));
+  if (!guest) {
+    return;
+  }
+
+  guest.setWindowOpenHandler(({ url }) => {
+    sendToShell("aivuda-shell:open-url-in-new-tab", { url });
+    return { action: "deny" };
+  });
+});
 
 app.whenReady().then(() => {
   createMenu();

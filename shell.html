@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AivudaOS</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f4f6f8;
+        color: #102a43;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        height: 100vh;
+        margin: 0;
+        overflow: hidden;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-rows: 1fr;
+        height: 100vh;
+        background: #f4f6f8;
+      }
+
+      .shell.expanded {
+        grid-template-rows: auto 1fr;
+      }
+
+      .top-chrome {
+        display: none;
+      }
+
+      .shell.expanded .top-chrome {
+        display: block;
+      }
+
+      .chrome-toggle {
+        position: fixed;
+        top: 8px;
+        right: 10px;
+        z-index: 20;
+        display: inline-grid;
+        place-items: center;
+        width: 34px;
+        height: 28px;
+        border: 1px solid rgba(148, 163, 184, 0.65);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.78);
+        color: #334e68;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+        backdrop-filter: blur(8px);
+      }
+
+      .tab-strip {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        min-height: 42px;
+        border-bottom: 1px solid #d8dee6;
+        background: #e9eef4;
+      }
+
+      .tabs {
+        display: flex;
+        align-items: stretch;
+        min-width: 0;
+        overflow-x: auto;
+      }
+
+      .tab {
+        display: inline-grid;
+        grid-template-columns: minmax(96px, 180px) 28px;
+        align-items: center;
+        min-width: 132px;
+        max-width: 220px;
+        height: 36px;
+        margin: 6px 0 0 6px;
+        border: 1px solid transparent;
+        border-bottom: 0;
+        border-radius: 7px 7px 0 0;
+        background: #dce5ef;
+        color: #334e68;
+      }
+
+      .tab.active {
+        background: #ffffff;
+        border-color: #d8dee6;
+        color: #102a43;
+      }
+
+      .tab-title {
+        min-width: 0;
+        padding: 0 8px 0 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .tab-close,
+      .new-tab,
+      .collapse-chrome,
+      .nav-button {
+        display: inline-grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #52606d;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .tab-close:hover,
+      .new-tab:hover,
+      .collapse-chrome:hover,
+      .nav-button:hover {
+        background: rgba(16, 42, 67, 0.1);
+        color: #102a43;
+      }
+
+      .toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 0 8px;
+      }
+
+      .address-row {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 8px;
+        align-items: center;
+        min-height: 42px;
+        padding: 6px 8px;
+        border-bottom: 1px solid #d8dee6;
+        background: #ffffff;
+      }
+
+      .nav-group {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+      }
+
+      .address-input {
+        width: 100%;
+        height: 30px;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        padding: 0 10px;
+        color: #102a43;
+        font: inherit;
+        font-size: 13px;
+      }
+
+      .address-input:focus {
+        border-color: #1769aa;
+        outline: 2px solid rgba(23, 105, 170, 0.16);
+      }
+
+      .status-text {
+        min-width: 116px;
+        color: #627d98;
+        font-size: 12px;
+        text-align: right;
+      }
+
+      .webview-stack {
+        position: relative;
+        min-height: 0;
+        background: #ffffff;
+      }
+
+      webview {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      webview.hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="shell" class="shell">
+      <button id="expand-chrome" class="chrome-toggle" type="button" title="Show tabs and address bar">☰</button>
+      <section class="top-chrome">
+        <div class="tab-strip">
+          <div id="tabs" class="tabs" role="tablist"></div>
+          <div class="toolbar-actions">
+            <button id="new-tab" class="new-tab" type="button" title="New tab">+</button>
+            <button id="collapse-chrome" class="collapse-chrome" type="button" title="Hide tabs and address bar">⌃</button>
+          </div>
+        </div>
+        <div class="address-row">
+          <div class="nav-group">
+            <button id="back-button" class="nav-button" type="button" title="Back">&lt;</button>
+            <button id="forward-button" class="nav-button" type="button" title="Forward">&gt;</button>
+            <button id="reload-button" class="nav-button" type="button" title="Reload">↻</button>
+          </div>
+          <input id="address-input" class="address-input" type="url" spellcheck="false" />
+          <div id="status-text" class="status-text">Ready</div>
+        </div>
+      </section>
+      <section id="webview-stack" class="webview-stack"></section>
+    </main>
+
+    <script src="./shell.js"></script>
+  </body>
+</html>
