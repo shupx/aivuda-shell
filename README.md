@@ -4,6 +4,8 @@ This package provides a desktop shell for opening AivudaOS and AivudaOS-hosted a
 
 It does not install or start AivudaOS itself. Start your AivudaOS services first, then launch the shell.
 
+![img](misc/aivuda-shell.png)
+
 ## Install
 
 Global install:
@@ -27,20 +29,6 @@ Open the default local AivudaOS URL:
 ```bash
 aivuda-shell
 ```
-
-Open a specific target URL:
-
-```bash
-aivuda-shell http://127.0.0.1/panelhub/ui/
-```
-
-You can also set the startup URL with an environment variable:
-
-```bash
-AIVUDA_SHELL_URL=http://127.0.0.1/foxglove_studio_embed/ui/ aivuda-shell
-```
-
-If both are provided, the command-line URL wins over `AIVUDA_SHELL_URL`.
 
 ## Add To App Menu
 

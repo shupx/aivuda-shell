@@ -13,7 +13,7 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 concurrency:
   group: nightly-build
@@ -206,6 +206,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -230,3 +232,61 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --tag latest
+
+      - name: Create and push git tag
+        shell: bash
+        env:
+          NIGHTLY_VERSION: ${{ needs.check-changes.outputs.nightly_version }}
+          TARGET_SHA: ${{ needs.check-changes.outputs.head_sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git rev-parse "refs/tags/${NIGHTLY_VERSION}" >/dev/null 2>&1; then
+            echo "Tag ${NIGHTLY_VERSION} already exists locally."
+          else
+            git tag -a "${NIGHTLY_VERSION}" "${TARGET_SHA}" -m "Nightly release ${NIGHTLY_VERSION}"
+          fi
+
+          git push origin "refs/tags/${NIGHTLY_VERSION}"
+
+      - name: Create GitHub release
+        uses: actions/github-script@v7
+        env:
+          NIGHTLY_VERSION: ${{ needs.check-changes.outputs.nightly_version }}
+          TARGET_SHA: ${{ needs.check-changes.outputs.head_sha }}
+        with:
+          script: |
+            const tag = process.env.NIGHTLY_VERSION;
+            const target = process.env.TARGET_SHA;
+
+            try {
+              await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              core.info(`Release for tag ${tag} already exists; skipping creation.`);
+              return;
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              target_commitish: target,
+              name: `Nightly ${tag}`,
+              body: [
+                `Nightly npm publish for \`${tag}\`.`,
+                '',
+                `- npm package: \`@aivuda/aivuda-shell@${tag}\``,
+                `- commit: \`${target}\``,
+                `- workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ].join('\n'),
+              prerelease: true,
+              generate_release_notes: false,
+            });
