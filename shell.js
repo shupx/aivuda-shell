@@ -568,13 +568,13 @@ function renderScreenRecordBar() {
   const statusTone = screenRecordStatus === "error" ? "#b42318" : screenRecordStatus === "saved" ? "#0f7b6c" : "#486581";
   const indicatorColor = isRecording ? "#d92d20" : isPaused ? "#d97706" : screenRecordStatus === "error" ? "#b42318" : "#98a2b3";
   const primaryButtonStyle =
-    "display:inline-grid;place-items:center;width:18px;height:18px;border:0;border-radius:999px;background:rgba(148,163,184,0.2);color:#334e68;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;";
+    "display:inline-grid;place-items:center;width:22px;height:22px;border:0;border-radius:999px;background:rgba(148,163,184,0.2);color:#334e68;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;";
   const stopButtonStyle =
-    "display:inline-grid;place-items:center;width:18px;height:18px;border:0;border-radius:999px;background:rgba(217,45,32,0.18);color:#b42318;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;";
+    "display:inline-grid;place-items:center;width:22px;height:22px;border:0;border-radius:999px;background:rgba(217,45,32,0.18);color:#b42318;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;";
   const chromeButtonStyle =
     "display:inline-grid;place-items:center;width:12px;height:12px;border:0;background:transparent;color:#334e68;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;";
   const disabledButtonStyle =
-    "display:inline-grid;place-items:center;width:18px;height:18px;border:0;border-radius:999px;background:rgba(203,213,225,0.2);color:#98a2b3;font:inherit;font-size:11px;line-height:1;cursor:not-allowed;padding:0;";
+    "display:inline-grid;place-items:center;width:22px;height:22px;border:0;border-radius:999px;background:rgba(203,213,225,0.2);color:#98a2b3;font:inherit;font-size:11px;line-height:1;cursor:not-allowed;padding:0;";
   const disabledChromeButtonStyle =
     "display:inline-grid;place-items:center;width:12px;height:12px;border:0;background:transparent;color:#98a2b3;font:inherit;font-size:11px;line-height:1;cursor:not-allowed;padding:0;";
 
