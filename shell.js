@@ -17,7 +17,7 @@ let screenRecordBarVisible = false;
 let screenRecordBarPosition = null;
 let screenRecordBarEl = null;
 let screenRecordDetailsExpanded = false;
-let screenRecordMode = "native";
+let screenRecordMode = "ffmpeg";
 let screenRecordStatus = "idle";
 let screenRecordStatusText = "Ready to record";
 let screenRecordElapsedMs = 0;
@@ -52,7 +52,7 @@ function normalizeSavedShellState(rawState) {
   const chromeExpanded = rawState.chromeExpanded === true;
   const performanceOverlayVisible = rawState.performanceOverlayVisible === true;
   const screenRecordBarVisible = rawState.screenRecordBarVisible === true;
-  const screenRecordMode = rawState.screenRecordMode === "ffmpeg" ? "ffmpeg" : "native";
+  const screenRecordMode = rawState.screenRecordMode === "native" ? "native" : "ffmpeg";
   const screenRecordBarPosition =
     rawState.screenRecordBarPosition &&
     Number.isFinite(rawState.screenRecordBarPosition.left) &&

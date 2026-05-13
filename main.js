@@ -137,7 +137,8 @@ async function showMissingFfmpegDialog() {
     buttons: ["OK"],
     defaultId: 0,
     message: "FFmpeg is not installed.",
-    detail: 'Run "sudo apt install ffmpeg -y" to install it.',
+    detail:
+      'Run "sudo apt install ffmpeg -y" to install it. You can also switch the screen record bar mode to Native to avoid installing FFmpeg, but the recorded video file will usually be larger.',
   });
 }
 
@@ -722,7 +723,8 @@ ipcMain.handle("aivuda-shell:start-ffmpeg-window-recording", async () => {
     await showMissingFfmpegDialog();
     return {
       ok: false,
-      error: 'FFmpeg is not installed. Run "sudo apt install ffmpeg -y" to install it.',
+      error:
+        'FFmpeg is not installed. Run "sudo apt install ffmpeg -y" to install it, or switch the screen record bar mode to Native if you want to avoid installing FFmpeg at the cost of larger video files.',
     };
   }
 
@@ -749,9 +751,9 @@ ipcMain.handle("aivuda-shell:start-ffmpeg-window-recording", async () => {
     "-c:v",
     "libx264",
     "-preset",
-    "veryfast",
+    "medium",
     "-crf",
-    "23",
+    "24",
     "-pix_fmt",
     "yuv420p",
     outputPath,
@@ -816,7 +818,8 @@ ipcMain.handle("aivuda-shell:start-ffmpeg-window-recording", async () => {
     if (error.code === "ENOENT") {
       return {
         ok: false,
-        error: 'FFmpeg is not installed. Run "sudo apt install ffmpeg -y" to install it.',
+        error:
+          'FFmpeg is not installed. Run "sudo apt install ffmpeg -y" to install it, or switch the screen record bar mode to Native if you want to avoid installing FFmpeg at the cost of larger video files.',
       };
     }
 
