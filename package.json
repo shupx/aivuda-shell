@@ -1,13 +1,30 @@
 {
-  "name": "aivuda-electron-shell",
+  "name": "aivuda-shell",
   "version": "0.1.0",
   "description": "A lightweight Electron shell for opening AivudaOS and hosted app panels.",
   "main": "main.js",
-  "private": true,
-  "scripts": {
-    "start": "electron ."
+  "bin": {
+    "aivuda-shell": "./bin/aivuda-shell.js",
+    "aivuda-shell-install-desktop": "./bin/install-desktop.js",
+    "aivuda-shell-remove-desktop": "./bin/remove-desktop.js"
   },
-  "devDependencies": {
+  "files": [
+    "assets",
+    "bin",
+    "guest-preload.js",
+    "main.js",
+    "offline.html",
+    "preload.js",
+    "README.md",
+    "README_dev.md",
+    "shell.html",
+    "shell.js"
+  ],
+  "scripts": {
+    "start": "electron .",
+    "start:cli": "node ./bin/aivuda-shell.js"
+  },
+  "dependencies": {
     "electron": "^36.2.1"
   }
 }

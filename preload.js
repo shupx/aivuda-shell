@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("aivudaShell", {
   onReloadCurrentTab: (callback) => ipcRenderer.on("aivuda-shell:reload-current-tab", callback),
   onShowPerformanceOverlay: (callback) => ipcRenderer.on("aivuda-shell:show-performance-overlay", callback),
   onShowBrowserChrome: (callback) => ipcRenderer.on("aivuda-shell:show-browser-chrome", callback),
+  onToggleBrowserChrome: (callback) => ipcRenderer.on("aivuda-shell:toggle-browser-chrome", callback),
   onToggleDevtools: (callback) => ipcRenderer.on("aivuda-shell:toggle-devtools", callback),
   onTogglePerformanceOverlay: (callback) => ipcRenderer.on("aivuda-shell:toggle-performance-overlay", callback),
   registerWebview: (guestInstanceId) => ipcRenderer.send("aivuda-shell:register-webview", guestInstanceId),

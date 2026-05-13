@@ -3,7 +3,6 @@ const tabsEl = document.getElementById("tabs");
 const stackEl = document.getElementById("webview-stack");
 const addressInput = document.getElementById("address-input");
 const statusText = document.getElementById("status-text");
-const expandChromeButton = document.getElementById("expand-chrome");
 const collapseChromeButton = document.getElementById("collapse-chrome");
 const newTabButton = document.getElementById("new-tab");
 const backButton = document.getElementById("back-button");
@@ -57,7 +56,7 @@ function writeShellState() {
   }
 
   return window.aivudaShell.saveShellState(buildShellStatePayload()).catch((error) => {
-    console.warn("[aivuda-electron-shell] failed to save shell state", error);
+    console.warn("[aivuda-shell] failed to save shell state", error);
   });
 }
 
@@ -68,8 +67,6 @@ function finishShellStateRestore() {
 
 function setChromeExpanded(isExpanded) {
   shellEl.classList.toggle("expanded", isExpanded);
-  expandChromeButton.textContent = isExpanded ? "⌃" : "☰";
-  expandChromeButton.title = isExpanded ? "Hide tabs and address bar" : "Show tabs and address bar";
   writeShellState();
 }
 
@@ -325,7 +322,7 @@ async function injectPerformanceOverlay(tab, action) {
     `,
     true,
   ).catch((error) => {
-    console.warn("[aivuda-electron-shell] failed to inject performance overlay", error);
+    console.warn("[aivuda-shell] failed to inject performance overlay", error);
   });
 }
 
@@ -479,10 +476,6 @@ function navigateActiveTab(rawUrl) {
   writeShellState();
 }
 
-expandChromeButton.addEventListener("click", () => {
-  setChromeExpanded(!shellEl.classList.contains("expanded"));
-});
-
 collapseChromeButton.addEventListener("click", () => {
   setChromeExpanded(false);
 });
@@ -531,6 +524,14 @@ window.aivudaShell.onShowBrowserChrome(() => {
 });
 window.aivudaShell.onHideBrowserChrome(() => {
   setChromeExpanded(false);
+});
+window.aivudaShell.onToggleBrowserChrome(() => {
+  const isExpanded = shellEl.classList.contains("expanded");
+  setChromeExpanded(!isExpanded);
+  if (!isExpanded) {
+    addressInput.focus();
+    addressInput.select();
+  }
 });
 window.aivudaShell.onToggleDevtools(() => {
   const tab = getActiveTab();
