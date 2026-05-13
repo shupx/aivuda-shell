@@ -62,3 +62,12 @@ window.open = function patchedWindowOpen(url, target, features) {
 
   return originalWindowOpen(url, target, features);
 };
+
+window.addEventListener("aivuda-shell:set-performance-overlay-visible", (event) => {
+  const isVisible = event?.detail?.visible;
+  if (typeof isVisible !== "boolean") {
+    return;
+  }
+
+  ipcRenderer.sendToHost("aivuda-shell:set-performance-overlay-visible", isVisible);
+});

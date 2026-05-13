@@ -12,6 +12,7 @@ const reloadButton = document.getElementById("reload-button");
 let defaultUrl = "http://127.0.0.1:80";
 let activeTabId = null;
 let nextTabId = 1;
+let performanceOverlayVisible = false;
 const tabs = new Map();
 const guestPreloadUrl = new URL("guest-preload.js", window.location.href).toString();
 const offlineUrl = new URL("offline.html", window.location.href).toString();
@@ -28,11 +29,13 @@ function normalizeSavedShellState(rawState) {
     : [];
   const activeTabId = typeof rawState.activeTabId === "string" ? rawState.activeTabId : null;
   const chromeExpanded = rawState.chromeExpanded === true;
+  const performanceOverlayVisible = rawState.performanceOverlayVisible === true;
 
   return {
     tabs,
     activeTabId,
     chromeExpanded,
+    performanceOverlayVisible,
   };
 }
 
@@ -40,6 +43,7 @@ function buildShellStatePayload() {
   return {
     activeTabId,
     chromeExpanded: shellEl.classList.contains("expanded"),
+    performanceOverlayVisible,
     tabs: Array.from(tabs.values()).map((tab) => ({
       id: tab.id,
       title: tab.title,
@@ -168,6 +172,24 @@ function updateActiveClasses() {
   }
 }
 
+function setPerformanceOverlayVisible(isVisible) {
+  if (performanceOverlayVisible === isVisible) {
+    return;
+  }
+
+  performanceOverlayVisible = isVisible;
+  writeShellState();
+}
+
+function syncPerformanceOverlayForActiveTab() {
+  const tab = getActiveTab();
+  if (!tab) {
+    return;
+  }
+
+  injectPerformanceOverlay(tab, performanceOverlayVisible ? "show" : "hide");
+}
+
 async function injectPerformanceOverlay(tab, action) {
   if (!tab || !tab.webview || tab.webview.getURL().startsWith("file://")) {
     return;
@@ -240,7 +262,12 @@ async function injectPerformanceOverlay(tab, action) {
           const closeButton = overlay.querySelector("[data-close]");
           const gpuToggleButton = overlay.querySelector("[data-gpu-toggle]");
           const gpuRow = overlay.querySelector("[data-gpu-row]");
-          closeButton.addEventListener("click", () => overlay.remove());
+          closeButton.addEventListener("click", () => {
+            overlay.remove();
+            window.dispatchEvent(new CustomEvent("aivuda-shell:set-performance-overlay-visible", {
+              detail: { visible: false }
+            }));
+          });
           gpuToggleButton.addEventListener("click", (event) => {
             event.stopPropagation();
             const isOpen = gpuRow.style.display !== "none";
@@ -358,16 +385,25 @@ function createTab(rawUrl, options = {}) {
     if (typeof webview.getWebContentsId === "function") {
       window.aivudaShell.registerWebview(webview.getWebContentsId());
     }
+    if (performanceOverlayVisible) {
+      injectPerformanceOverlay(tab, "show");
+    }
   });
 
   webview.addEventListener("ipc-message", (event) => {
-    if (event.channel !== "aivuda-shell:open-url-in-new-tab") {
+    if (event.channel === "aivuda-shell:open-url-in-new-tab") {
+      const [nextUrl] = event.args;
+      if (typeof nextUrl === "string" && nextUrl.trim()) {
+        createTab(nextUrl);
+      }
       return;
     }
 
-    const [nextUrl] = event.args;
-    if (typeof nextUrl === "string" && nextUrl.trim()) {
-      createTab(nextUrl);
+    if (event.channel === "aivuda-shell:set-performance-overlay-visible") {
+      const [isVisible] = event.args;
+      if (typeof isVisible === "boolean") {
+        setPerformanceOverlayVisible(isVisible);
+      }
     }
   });
 
@@ -431,6 +467,7 @@ function activateTab(id) {
   updateActiveClasses();
   updateAddressFromActiveTab();
   updateNavigationState();
+  syncPerformanceOverlayForActiveTab();
   writeShellState();
 }
 
@@ -540,13 +577,16 @@ window.aivudaShell.onToggleDevtools(() => {
   }
 });
 window.aivudaShell.onShowPerformanceOverlay(() => {
-  injectPerformanceOverlay(getActiveTab(), "show");
+  setPerformanceOverlayVisible(true);
+  syncPerformanceOverlayForActiveTab();
 });
 window.aivudaShell.onHidePerformanceOverlay(() => {
-  injectPerformanceOverlay(getActiveTab(), "hide");
+  setPerformanceOverlayVisible(false);
+  syncPerformanceOverlayForActiveTab();
 });
 window.aivudaShell.onTogglePerformanceOverlay(() => {
-  injectPerformanceOverlay(getActiveTab(), "toggle");
+  setPerformanceOverlayVisible(!performanceOverlayVisible);
+  syncPerformanceOverlayForActiveTab();
 });
 window.aivudaShell.onClearBrowserData(async () => {
   await window.aivudaShell.clearBrowserData();
@@ -565,6 +605,7 @@ window.aivudaShell.getStartup().then((startup) => {
   defaultUrl = startup.defaultUrl || defaultUrl;
   const savedState = normalizeSavedShellState(startup.savedState);
   if (savedState) {
+    performanceOverlayVisible = savedState.performanceOverlayVisible;
     setChromeExpanded(savedState.chromeExpanded);
     const restoredTabs = savedState.tabs.length > 0 ? savedState.tabs : [{ url: startup.initialUrl || defaultUrl }];
     for (const tabState of restoredTabs) {
