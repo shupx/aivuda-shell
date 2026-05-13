@@ -11,7 +11,12 @@ It does not install or start AivudaOS itself. Start your AivudaOS services first
 Global install and update with:
 
 ```bash
-npm install -g @aivuda/aivuda-shell@latest
+# Use a custom mirror for Electron downloads if needed:
+export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ 
+
+npm install -g @aivuda/aivuda-shell@latest 
+# or npm install with a custom registry mirror
+npm install -g @aivuda/aivuda-shell@latest --registry=https://registry.npmmirror.com
 ```
 
 One-off run without installing globally:
@@ -20,7 +25,7 @@ One-off run without installing globally:
 npx @aivuda/aivuda-shell
 ```
 
-If your npm setup uses a custom registry mirror for Electron downloads, keep using that same mirror during installation.
+The config and browser session data are stored in `~/.config/aivuda-shell/`. Uninstalling the package does not remove those directories.
 
 ## Start
 
