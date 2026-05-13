@@ -1,0 +1,13 @@
+{
+  "name": "aivuda-electron-shell",
+  "version": "0.1.0",
+  "description": "A lightweight Electron shell for opening AivudaOS and hosted app panels.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^36.2.1"
+  }
+}
