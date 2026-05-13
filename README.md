@@ -9,13 +9,13 @@ It does not install or start AivudaOS itself. Start your AivudaOS services first
 Global install:
 
 ```bash
-npm install -g aivuda-shell
+npm install -g @aivuda/aivuda-shell
 ```
 
 One-off run without installing globally:
 
 ```bash
-npx aivuda-shell
+npx @aivuda/aivuda-shell
 ```
 
 If your npm setup uses a custom registry mirror for Electron downloads, keep using that same mirror during installation.

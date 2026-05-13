@@ -1,6 +1,6 @@
 # AivudaOS Electron Shell Developer Notes
 
-`aivuda-shell` is a lightweight Electron desktop shell for opening AivudaOS and AivudaOS-hosted app panels in a dedicated Chromium window.
+`@aivuda/aivuda-shell` is a lightweight Electron desktop shell for opening AivudaOS and AivudaOS-hosted app panels in a dedicated Chromium window.
 
 It does not install, start, or supervise AivudaOS, PanelHub, Foxglove Studio Embed, Caddy, or any backend services. Start those services through the normal AivudaOS workflow first.
 
@@ -48,6 +48,12 @@ npm run start:cli -- http://127.0.0.1/panelhub/ui/
 ```
 
 When published to npm, users can launch the same entry point with `aivuda-shell`.
+
+Install the published package with:
+
+```bash
+npm install -g @aivuda/aivuda-shell
+```
 
 ## HTTPS Certificates
 

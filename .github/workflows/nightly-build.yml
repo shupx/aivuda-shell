@@ -1,0 +1,232 @@
+name: Nightly npm publish
+
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Force rebuild and republish even when HEAD matches the last successful nightly run
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: nightly-build
+  cancel-in-progress: false
+
+jobs:
+  check-changes:
+    name: Check nightly source changes
+    runs-on: ubuntu-24.04
+    outputs:
+      should_publish: ${{ steps.release-check.outputs.should_publish }}
+      base_version: ${{ steps.meta.outputs.base_version }}
+      build_date: ${{ steps.meta.outputs.build_date }}
+      build_seq: ${{ steps.meta.outputs.build_seq }}
+      nightly_version: ${{ steps.meta.outputs.nightly_version }}
+      head_sha: ${{ steps.meta.outputs.head_sha }}
+      previous_head_sha: ${{ steps.release-check.outputs.previous_head_sha }}
+      trigger_mode: ${{ steps.meta.outputs.trigger_mode }}
+      forced_build: ${{ steps.meta.outputs.forced_build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compute build metadata
+        id: meta
+        uses: actions/github-script@v7
+        env:
+          FORCE_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const workflowId = '.github/workflows/nightly-build.yml';
+            const currentRunId = Number(process.env.GITHUB_RUN_ID || '0');
+            const packageJsonPath = path.join(process.env.GITHUB_WORKSPACE, 'package.json');
+
+            if (!currentRunId) {
+              throw new Error('GITHUB_RUN_ID is missing; cannot compute nightly build metadata.');
+            }
+
+            const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+            const baseVersion = pkg.version;
+            if (!baseVersion) {
+              throw new Error('package.json version is missing.');
+            }
+
+            const { data: currentRun } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: currentRunId,
+            });
+
+            const buildDay = (currentRun.created_at || '').slice(0, 10);
+            if (!buildDay) {
+              throw new Error(`Current workflow run ${currentRunId} is missing created_at.`);
+            }
+
+            const sameDayRuns = [];
+
+            for (let page = 1; page <= 10; page += 1) {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                per_page: 100,
+                page,
+              });
+
+              const runs = data.workflow_runs || [];
+              if (!runs.length) {
+                break;
+              }
+
+              sameDayRuns.push(
+                ...runs.filter((run) => (run.created_at || '').startsWith(buildDay))
+              );
+
+              if (runs[runs.length - 1]?.created_at?.slice(0, 10) < buildDay) {
+                break;
+              }
+            }
+
+            if (!sameDayRuns.some((run) => run.id === currentRunId)) {
+              sameDayRuns.push(currentRun);
+            }
+
+            sameDayRuns.sort((left, right) => {
+              const leftCreated = new Date(left.created_at || 0).getTime();
+              const rightCreated = new Date(right.created_at || 0).getTime();
+              return leftCreated - rightCreated || left.id - right.id;
+            });
+
+            const buildSeqIndex = sameDayRuns.findIndex((run) => run.id === currentRunId);
+            if (buildSeqIndex === -1) {
+              throw new Error(`Unable to locate current workflow run ${currentRunId} in the same-day run list.`);
+            }
+
+            const buildDate = buildDay.replace(/-/g, '');
+            const buildSeq = String(buildSeqIndex + 1);
+            const nightlyVersion = `${baseVersion}-${buildDate}.${buildSeq}`;
+
+            core.info(`Resolved nightly build date ${buildDate} and daily build sequence ${buildSeq}.`);
+            core.setOutput('base_version', baseVersion);
+            core.setOutput('build_date', buildDate);
+            core.setOutput('build_seq', buildSeq);
+            core.setOutput('nightly_version', nightlyVersion);
+            core.setOutput('head_sha', currentRun.head_sha || process.env.GITHUB_SHA || context.sha);
+            core.setOutput('trigger_mode', process.env.GITHUB_EVENT_NAME || context.eventName);
+            core.setOutput('forced_build', process.env.FORCE_BUILD || 'false');
+
+      - name: Compare against latest successful nightly run
+        id: release-check
+        uses: actions/github-script@v7
+        env:
+          HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
+          FORCE_BUILD: ${{ steps.meta.outputs.forced_build }}
+        with:
+          script: |
+            let shouldPublish = true;
+            let previousHeadSha = '';
+            const workflowId = '.github/workflows/nightly-build.yml';
+            const forceBuild = String(process.env.FORCE_BUILD || '').toLowerCase() === 'true';
+
+            if (forceBuild) {
+              core.info('Force rebuild requested for workflow_dispatch; skipping prior-run SHA comparison.');
+              core.setOutput('previous_head_sha', previousHeadSha);
+              core.setOutput('should_publish', 'true');
+              return;
+            }
+
+            try {
+              const branch = context.ref.startsWith('refs/heads/')
+                ? context.ref.replace('refs/heads/', '')
+                : undefined;
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                ...(branch ? { branch } : {}),
+                status: 'success',
+                per_page: 10,
+              });
+
+              const currentRunId = Number(process.env.GITHUB_RUN_ID || '0');
+              const previousSuccessfulRun = (data.workflow_runs || []).find(
+                (run) => run.id !== currentRunId
+              );
+              previousHeadSha = previousSuccessfulRun?.head_sha || '';
+
+              core.info(`Current HEAD: ${process.env.HEAD_SHA}`);
+              core.info(`Previous successful nightly SHA: ${previousHeadSha || 'not found'}`);
+
+              if (previousHeadSha === process.env.HEAD_SHA) {
+                shouldPublish = false;
+              }
+            } catch (error) {
+              core.warning(`Unable to inspect prior nightly runs: ${error.message}`);
+            }
+
+            core.setOutput('previous_head_sha', previousHeadSha);
+            core.setOutput('should_publish', shouldPublish ? 'true' : 'false');
+
+      - name: Write summary
+        shell: bash
+        run: |
+          {
+            echo "## Nightly build decision"
+            echo
+            echo "- Trigger mode: \`${{ steps.meta.outputs.trigger_mode }}\`"
+            echo "- Forced build: \`${{ steps.meta.outputs.forced_build }}\`"
+            echo "- Base version: \`${{ steps.meta.outputs.base_version }}\`"
+            echo "- Nightly version: \`${{ steps.meta.outputs.nightly_version }}\`"
+            echo "- Current HEAD SHA: \`${{ steps.meta.outputs.head_sha }}\`"
+            echo "- Previous successful nightly HEAD SHA: \`${{ steps.release-check.outputs.previous_head_sha || 'not found' }}\`"
+            echo "- Should publish: \`${{ steps.release-check.outputs.should_publish }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish nightly package
+    needs: check-changes
+    if: needs.check-changes.outputs.should_publish == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare nightly version
+        shell: bash
+        env:
+          NIGHTLY_VERSION: ${{ needs.check-changes.outputs.nightly_version }}
+        run: |
+          node -e "const fs=require('fs'); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); pkg.version=process.env.NIGHTLY_VERSION; fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');"
+
+      - name: Verify package contents
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag latest
