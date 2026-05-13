@@ -208,6 +208,23 @@ async function saveFinalShellStateBeforeClose(windowToClose) {
   persistLatestShellState();
 }
 
+async function finalizeActiveRecordingBeforeClose(windowToClose) {
+  if (!windowToClose || windowToClose.isDestroyed()) {
+    return { ok: true };
+  }
+
+  try {
+    const result = await windowToClose.webContents.executeJavaScript(
+      "typeof window.__aivudaFinalizeActiveRecordingBeforeClose === 'function' ? window.__aivudaFinalizeActiveRecordingBeforeClose() : { ok: true }",
+      true,
+    );
+    return result && typeof result === "object" ? result : { ok: true };
+  } catch (error) {
+    console.error("[aivuda-shell] failed to finalize active recording before close", error);
+    return { ok: false, error: error.message };
+  }
+}
+
 function clearShellState() {
   if (!shellStatePath) {
     shellStatePath = getShellStatePath();
@@ -353,6 +370,12 @@ function createMainWindow() {
 
     isFinalShellStateSaveInProgress = true;
     const windowToClose = mainWindow;
+    const recordingFinalizeResult = await finalizeActiveRecordingBeforeClose(windowToClose);
+    if (!recordingFinalizeResult?.ok) {
+      isFinalShellStateSaveInProgress = false;
+      return;
+    }
+
     await saveFinalShellStateBeforeClose(windowToClose);
     isClosingMainWindow = true;
     isFinalShellStateSaveInProgress = false;

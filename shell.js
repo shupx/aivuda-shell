@@ -16,10 +16,13 @@ let performanceOverlayVisible = false;
 let screenRecordBarVisible = false;
 let screenRecordBarPosition = null;
 let screenRecordBarEl = null;
+let screenRecordDetailsExpanded = false;
 let screenRecordStatus = "idle";
 let screenRecordStatusText = "Ready to record";
 let screenRecordElapsedMs = 0;
 let screenRecordStartedAt = 0;
+let screenRecordAccumulatedMs = 0;
+let screenRecordPausedAt = 0;
 let screenRecordTimer = 0;
 let screenRecorder = null;
 let screenRecorderStream = null;
@@ -28,6 +31,7 @@ let screenRecorderOutputPath = "";
 let screenRecorderOutputDir = "";
 let screenRecorderLastSavedPath = "";
 let isStoppingScreenRecorder = false;
+let screenRecordFinalizePromise = null;
 const tabs = new Map();
 const guestPreloadUrl = new URL("guest-preload.js", window.location.href).toString();
 const offlineUrl = new URL("offline.html", window.location.href).toString();
@@ -439,7 +443,7 @@ function startScreenRecordTimer() {
       stopScreenRecordTimer();
       return;
     }
-    screenRecordElapsedMs = Date.now() - screenRecordStartedAt;
+    screenRecordElapsedMs = screenRecordAccumulatedMs + (Date.now() - screenRecordStartedAt);
     renderScreenRecordBar();
   }, 250);
 }
@@ -454,7 +458,7 @@ function cleanupScreenRecorderStream() {
 }
 
 function canCloseScreenRecordBar() {
-  return screenRecordStatus !== "recording" && screenRecordStatus !== "stopping";
+  return screenRecordStatus !== "recording" && screenRecordStatus !== "paused" && screenRecordStatus !== "stopping";
 }
 
 function updateScreenRecordBarLayout() {
@@ -466,6 +470,7 @@ function updateScreenRecordBarLayout() {
     screenRecordBarEl.style.left = `${screenRecordBarPosition.left}px`;
     screenRecordBarEl.style.top = `${screenRecordBarPosition.top}px`;
     screenRecordBarEl.style.right = "auto";
+    screenRecordBarEl.style.bottom = "auto";
   }
 }
 
@@ -486,16 +491,16 @@ function renderScreenRecordBar() {
       "right:16px",
       "bottom:16px",
       "z-index:2147483647",
-      "min-width:240px",
-      "max-width:300px",
-      "padding:10px 12px",
-      "border:1px solid rgba(148,163,184,0.42)",
+      "min-width:124px",
+      "max-width:320px",
+      "padding:2px 3px 2px 4px",
+      "border:1px solid rgba(148,163,184,0.22)",
       "border-radius:10px",
-      "background:rgba(255,255,255,0.76)",
+      "background:rgba(255,255,255,0.24)",
       "color:#102a43",
-      "font:12px/1.35 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
-      "box-shadow:0 12px 32px rgba(15,23,42,0.18)",
-      "backdrop-filter:blur(10px)",
+      "font:11px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+      "box-shadow:none",
+      "backdrop-filter:blur(4px)",
       "user-select:none"
     ].join(";");
 
@@ -544,73 +549,236 @@ function renderScreenRecordBar() {
   }
 
   const isRecording = screenRecordStatus === "recording";
+  const isPaused = screenRecordStatus === "paused";
   const isBusy = screenRecordStatus === "stopping";
   const elapsedText = formatElapsedTime(screenRecordElapsedMs);
-  const statusTone = screenRecordStatus === "error" ? "#b42318" : isRecording ? "#b42318" : "#486581";
+  const canExpand = Boolean(screenRecordStatusText || screenRecorderLastSavedPath || screenRecordStatus === "error");
+  const detailsOpen = screenRecordDetailsExpanded && canExpand;
+  const statusTone = screenRecordStatus === "error" ? "#b42318" : screenRecordStatus === "saved" ? "#0f7b6c" : "#486581";
+  const indicatorColor = isRecording ? "#d92d20" : isPaused ? "#d97706" : screenRecordStatus === "error" ? "#b42318" : "#98a2b3";
+  const primaryButtonStyle =
+    "display:inline-grid;place-items:center;width:18px;height:18px;border:0;border-radius:999px;background:rgba(148,163,184,0.2);color:#334e68;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;";
+  const stopButtonStyle =
+    "display:inline-grid;place-items:center;width:18px;height:18px;border:0;border-radius:999px;background:rgba(217,45,32,0.18);color:#b42318;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;";
+  const chromeButtonStyle =
+    "display:inline-grid;place-items:center;width:12px;height:12px;border:0;background:transparent;color:#334e68;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;";
+  const disabledButtonStyle =
+    "display:inline-grid;place-items:center;width:18px;height:18px;border:0;border-radius:999px;background:rgba(203,213,225,0.2);color:#98a2b3;font:inherit;font-size:11px;line-height:1;cursor:not-allowed;padding:0;";
+  const disabledChromeButtonStyle =
+    "display:inline-grid;place-items:center;width:12px;height:12px;border:0;background:transparent;color:#98a2b3;font:inherit;font-size:11px;line-height:1;cursor:not-allowed;padding:0;";
 
   screenRecordBarEl.innerHTML = [
-    '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:move;">',
-    '<div style="display:flex;align-items:center;gap:8px;min-width:0;">',
-    `<span style="display:inline-block;width:10px;height:10px;border-radius:999px;background:${isRecording ? "#d92d20" : "#98a2b3"};box-shadow:${isRecording ? "0 0 0 4px rgba(217,45,32,0.16)" : "none"};"></span>`,
-    '<span style="font-weight:700;">Screen Record</span>',
+    `<div style="display:flex;align-items:center;gap:4px;cursor:move;${detailsOpen ? "margin-bottom:4px;" : ""}">`,
+    `<span style="display:inline-block;width:7px;height:7px;border-radius:999px;background:${indicatorColor};box-shadow:none;flex:0 0 auto;"></span>`,
+    `<div style="min-width:46px;font-variant-numeric:tabular-nums;font-weight:700;color:${isRecording ? "#b42318" : isPaused ? "#b45309" : "#102a43"};">${elapsedText}</div>`,
+    '<div style="display:flex;align-items:center;gap:4px;margin-left:2px;">',
+    screenRecordStatus === "idle" || screenRecordStatus === "saved" || screenRecordStatus === "error"
+      ? `<button type="button" data-start-screen-record title="Start recording" style="${isBusy ? disabledButtonStyle : primaryButtonStyle}">●</button>`
+      : "",
+    isRecording || isPaused
+      ? `<button type="button" data-pause-screen-record title="${isPaused ? "Resume recording" : "Pause recording"}" style="${isBusy ? disabledButtonStyle : primaryButtonStyle}">${isPaused ? "▶" : "⏸"}</button>`
+      : "",
+    isRecording || isPaused || isBusy
+      ? `<button type="button" data-stop-screen-record title="Stop and save recording" style="${isBusy ? disabledButtonStyle : stopButtonStyle}">■</button>`
+      : "",
+    canExpand
+      ? `<button type="button" data-expand-screen-record title="${detailsOpen ? "Hide details" : "Show details"}" style="${chromeButtonStyle}">${detailsOpen ? "▴" : "▾"}</button>`
+      : "",
+    canCloseScreenRecordBar()
+      ? `<button type="button" data-close-screen-record title="Hide" style="${chromeButtonStyle}">×</button>`
+      : `<button type="button" title="Recording is active" disabled style="${disabledChromeButtonStyle}">×</button>`,
     "</div>",
-    `<button type="button" data-close-screen-record title="Hide" style="width:24px;height:24px;border:0;border-radius:6px;background:transparent;color:${canCloseScreenRecordBar() ? "#52606d" : "#cbd5e1"};font:inherit;line-height:1;cursor:${canCloseScreenRecordBar() ? "pointer" : "not-allowed"};">×</button>`,
     "</div>",
-    '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;">',
-    `<div style="font-variant-numeric:tabular-nums;font-weight:700;color:${isRecording ? "#b42318" : "#102a43"};">${elapsedText}</div>`,
-    `<button type="button" data-toggle-screen-record style="min-width:88px;height:30px;padding:0 12px;border:0;border-radius:999px;background:${isRecording ? "#b42318" : "#1769aa"};color:#fff;font:inherit;font-weight:700;cursor:${isBusy ? "wait" : "pointer"};opacity:${isBusy ? "0.75" : "1"};">${isRecording ? "Stop" : isBusy ? "Saving..." : "Start"}</button>`,
-    "</div>",
-    `<div style="margin-top:8px;min-height:16px;color:${statusTone};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${screenRecordStatusText}</div>`,
+    detailsOpen
+      ? [
+          '<div style="margin-top:2px;padding:4px 6px 2px;border-top:1px solid rgba(148,163,184,0.35);border-radius:8px;background:rgba(255,255,255,0.2);max-width:300px;overflow-wrap:anywhere;">',
+          `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:${statusTone};">${screenRecordStatus}</div>`,
+          `<div style="margin-top:2px;font-size:11px;color:#334e68;">${screenRecordStatusText || "No details"}</div>`,
+          screenRecorderLastSavedPath
+            ? `<div style="margin-top:4px;font-size:10px;color:#486581;">${screenRecorderLastSavedPath}</div>`
+            : "",
+          "</div>",
+        ].join("")
+      : "",
   ].join("");
 
   const closeButton = screenRecordBarEl.querySelector("[data-close-screen-record]");
-  const toggleButton = screenRecordBarEl.querySelector("[data-toggle-screen-record]");
+  const startButton = screenRecordBarEl.querySelector("[data-start-screen-record]");
+  const pauseButton = screenRecordBarEl.querySelector("[data-pause-screen-record]");
+  const stopButton = screenRecordBarEl.querySelector("[data-stop-screen-record]");
+  const expandButton = screenRecordBarEl.querySelector("[data-expand-screen-record]");
 
-  closeButton.addEventListener("click", () => {
-    if (!canCloseScreenRecordBar()) {
-      return;
-    }
+  if (closeButton) {
+    closeButton.addEventListener("click", () => {
+      if (!canCloseScreenRecordBar()) {
+        return;
+      }
 
-    setScreenRecordBarVisible(false);
-    renderScreenRecordBar();
+      setScreenRecordBarVisible(false);
+      screenRecordDetailsExpanded = false;
+      renderScreenRecordBar();
+    });
+  }
+
+  if (startButton) {
+    startButton.disabled = isBusy;
+    startButton.addEventListener("click", () => {
+      if (!isBusy) {
+        startScreenRecording();
+      }
+    });
+  }
+
+  if (pauseButton) {
+    pauseButton.disabled = isBusy;
+    pauseButton.addEventListener("click", () => {
+      if (isBusy) {
+        return;
+      }
+
+      if (screenRecordStatus === "recording") {
+        pauseScreenRecording();
+      } else if (screenRecordStatus === "paused") {
+        resumeScreenRecording();
+      }
+    });
+  }
+
+  if (stopButton) {
+    stopButton.disabled = isBusy;
+    stopButton.addEventListener("click", () => {
+      if (!isBusy) {
+        stopScreenRecording();
+      }
+    });
+  }
+
+  if (expandButton) {
+    expandButton.addEventListener("click", () => {
+      screenRecordDetailsExpanded = !screenRecordDetailsExpanded;
+      renderScreenRecordBar();
+    });
+  }
+}
+
+function resetScreenRecordingSessionState() {
+  screenRecorder = null;
+  screenRecorderChunks = [];
+  cleanupScreenRecorderStream();
+  screenRecorderOutputPath = "";
+  screenRecorderOutputDir = "";
+  screenRecordStartedAt = 0;
+  screenRecordElapsedMs = 0;
+  screenRecordAccumulatedMs = 0;
+  screenRecordPausedAt = 0;
+  stopScreenRecordTimer();
+}
+
+function createScreenRecordFinalizePromise() {
+  if (screenRecordFinalizePromise) {
+    return screenRecordFinalizePromise.promise;
+  }
+
+  let resolvePromise;
+  let rejectPromise;
+  const promise = new Promise((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
   });
+  screenRecordFinalizePromise = {
+    promise,
+    resolve: resolvePromise,
+    reject: rejectPromise,
+  };
+  return promise;
+}
 
-  toggleButton.disabled = isBusy;
-  toggleButton.addEventListener("click", () => {
-    if (isBusy) {
-      return;
-    }
+function resolveScreenRecordFinalize(value) {
+  if (!screenRecordFinalizePromise) {
+    return;
+  }
 
-    if (screenRecordStatus === "recording") {
-      stopScreenRecording();
-      return;
-    }
+  screenRecordFinalizePromise.resolve(value);
+  screenRecordFinalizePromise = null;
+}
 
-    startScreenRecording();
-  });
+function rejectScreenRecordFinalize(error) {
+  if (!screenRecordFinalizePromise) {
+    return;
+  }
+
+  screenRecordFinalizePromise.reject(error);
+  screenRecordFinalizePromise = null;
 }
 
 async function stopScreenRecording() {
-  if (!screenRecorder || isStoppingScreenRecorder || screenRecordStatus !== "recording") {
-    return;
+  if (screenRecordStatus === "stopping") {
+    return screenRecordFinalizePromise?.promise || Promise.resolve();
+  }
+
+  if (!screenRecorder || (screenRecordStatus !== "recording" && screenRecordStatus !== "paused")) {
+    return Promise.resolve();
+  }
+
+  const finalizePromise = createScreenRecordFinalizePromise();
+
+  if (screenRecordStatus === "paused") {
+    try {
+      screenRecorder.resume();
+    } catch (_error) {}
   }
 
   isStoppingScreenRecorder = true;
   stopScreenRecordTimer();
-  screenRecordElapsedMs = Date.now() - screenRecordStartedAt;
+  screenRecordElapsedMs =
+    screenRecordStatus === "paused" ? screenRecordAccumulatedMs : screenRecordAccumulatedMs + (Date.now() - screenRecordStartedAt);
   setScreenRecordState("stopping", "Saving recording...");
 
-  await new Promise((resolve) => {
-    const finalize = () => resolve();
-    screenRecorder.addEventListener("stop", finalize, { once: true });
-    try {
-      screenRecorder.stop();
-    } catch (_error) {
-      resolve();
-    }
-  });
+  try {
+    screenRecorder.stop();
+  } catch (error) {
+    isStoppingScreenRecorder = false;
+    setScreenRecordState("error", `Record stop failed: ${error.message}`);
+    screenRecordDetailsExpanded = true;
+    rejectScreenRecordFinalize(error);
+  }
 
-  isStoppingScreenRecorder = false;
+  return finalizePromise;
+}
+
+function pauseScreenRecording() {
+  if (!screenRecorder || screenRecordStatus !== "recording") {
+    return;
+  }
+
+  try {
+    screenRecorder.pause();
+    screenRecordAccumulatedMs += Date.now() - screenRecordStartedAt;
+    screenRecordPausedAt = Date.now();
+    screenRecordElapsedMs = screenRecordAccumulatedMs;
+    stopScreenRecordTimer();
+    setScreenRecordState("paused", "Recording paused");
+  } catch (error) {
+    setScreenRecordState("error", `Pause failed: ${error.message}`);
+    screenRecordDetailsExpanded = true;
+  }
+}
+
+function resumeScreenRecording() {
+  if (!screenRecorder || screenRecordStatus !== "paused") {
+    return;
+  }
+
+  try {
+    screenRecorder.resume();
+    screenRecordPausedAt = 0;
+    screenRecordStartedAt = Date.now();
+    startScreenRecordTimer();
+    setScreenRecordState("recording", "Recording");
+  } catch (error) {
+    setScreenRecordState("error", `Resume failed: ${error.message}`);
+    screenRecordDetailsExpanded = true;
+  }
 }
 
 async function finalizeScreenRecording() {
@@ -627,17 +795,19 @@ async function finalizeScreenRecording() {
     }
 
     screenRecorderLastSavedPath = response.outputPath;
-    setScreenRecordState("idle", `Saved to ${response.outputPath}`);
+    setScreenRecordState("saved", "Recording saved");
+    isStoppingScreenRecorder = false;
+    resetScreenRecordingSessionState();
+    renderScreenRecordBar();
+    resolveScreenRecordFinalize(response.outputPath);
   } catch (error) {
+    isStoppingScreenRecorder = false;
     setScreenRecordState("error", `Record save failed: ${error.message}`);
-  } finally {
+    screenRecordDetailsExpanded = true;
+    cleanupScreenRecorderStream();
     screenRecorder = null;
     screenRecorderChunks = [];
-    cleanupScreenRecorderStream();
-    screenRecorderOutputPath = "";
-    screenRecorderOutputDir = "";
-    screenRecordStartedAt = 0;
-    screenRecordElapsedMs = 0;
+    rejectScreenRecordFinalize(error);
     renderScreenRecordBar();
   }
 }
@@ -659,11 +829,13 @@ function chooseScreenRecordingMimeType() {
 }
 
 async function startScreenRecording() {
-  if (screenRecordStatus === "recording" || screenRecordStatus === "stopping") {
+  if (screenRecordStatus === "recording" || screenRecordStatus === "paused" || screenRecordStatus === "stopping") {
     return;
   }
 
   setScreenRecordBarVisible(true);
+  screenRecordDetailsExpanded = false;
+  screenRecorderLastSavedPath = "";
   renderScreenRecordBar();
   setScreenRecordState("idle", "Preparing window capture...");
 
@@ -692,6 +864,8 @@ async function startScreenRecording() {
     screenRecorderOutputPath = prepared.outputPath;
     screenRecorderOutputDir = prepared.recordingsDir || "";
     screenRecordStartedAt = Date.now();
+    screenRecordAccumulatedMs = 0;
+    screenRecordPausedAt = 0;
     screenRecordElapsedMs = 0;
 
     recorder.addEventListener("dataavailable", (event) => {
@@ -706,16 +880,16 @@ async function startScreenRecording() {
 
     recorder.addEventListener("error", (event) => {
       const message = event?.error?.message || "Recording failed.";
+      isStoppingScreenRecorder = false;
       setScreenRecordState("error", `Record failed: ${message}`);
-      screenRecorder = null;
-      screenRecorderChunks = [];
-      cleanupScreenRecorderStream();
-      stopScreenRecordTimer();
+      screenRecordDetailsExpanded = true;
+      resetScreenRecordingSessionState();
+      rejectScreenRecordFinalize(new Error(message));
     });
 
     for (const track of stream.getTracks()) {
       track.addEventListener("ended", () => {
-        if (screenRecordStatus === "recording") {
+        if (screenRecordStatus === "recording" || screenRecordStatus === "paused") {
           stopScreenRecording();
         }
       });
@@ -723,31 +897,41 @@ async function startScreenRecording() {
 
     recorder.start(1000);
     startScreenRecordTimer();
-    setScreenRecordState("recording", `Saving to ${prepared.outputPath}`);
+    setScreenRecordState("recording", "Recording");
   } catch (error) {
-    screenRecorder = null;
-    screenRecorderChunks = [];
-    cleanupScreenRecorderStream();
-    stopScreenRecordTimer();
-    screenRecordStartedAt = 0;
-    screenRecordElapsedMs = 0;
+    resetScreenRecordingSessionState();
     setScreenRecordState("error", `Record start failed: ${error.message}`);
+    screenRecordDetailsExpanded = true;
   }
 }
 
-function toggleScreenRecordBar() {
-  if (screenRecordBarVisible) {
-    if (!canCloseScreenRecordBar()) {
-      renderScreenRecordBar();
-      return;
-    }
-    setScreenRecordBarVisible(false);
-    renderScreenRecordBar();
-    return;
-  }
-
+function showScreenRecordBar() {
   setScreenRecordBarVisible(true);
   renderScreenRecordBar();
+}
+
+async function finalizeActiveRecordingBeforeClose() {
+  if (screenRecordStatus !== "recording" && screenRecordStatus !== "paused" && screenRecordStatus !== "stopping") {
+    return { ok: true };
+  }
+
+  try {
+    await stopScreenRecording();
+    return { ok: true, outputPath: screenRecorderLastSavedPath };
+  } catch (error) {
+    screenRecordDetailsExpanded = true;
+    renderScreenRecordBar();
+    return {
+      ok: false,
+      error: error?.message || "Failed to finalize recording before close.",
+    };
+  }
+}
+
+window.__aivudaFinalizeActiveRecordingBeforeClose = finalizeActiveRecordingBeforeClose;
+
+function toggleScreenRecordBar() {
+  showScreenRecordBar();
 }
 
 function createTab(rawUrl, options = {}) {
@@ -986,7 +1170,7 @@ window.aivudaShell.onTogglePerformanceOverlay(() => {
   syncPerformanceOverlayForActiveTab();
 });
 window.aivudaShell.onToggleScreenRecordBar(() => {
-  toggleScreenRecordBar();
+  showScreenRecordBar();
 });
 window.aivudaShell.onClearBrowserData(async () => {
   await window.aivudaShell.clearBrowserData();
@@ -995,12 +1179,6 @@ window.aivudaShell.onClearBrowserData(async () => {
 
 window.addEventListener("pagehide", () => {
   writeShellState();
-});
-
-window.addEventListener("beforeunload", () => {
-  if (screenRecordStatus === "recording") {
-    stopScreenRecording();
-  }
 });
 
 window.setInterval(() => {
