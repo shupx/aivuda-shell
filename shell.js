@@ -34,6 +34,9 @@ let screenRecorderLastSavedPath = "";
 let isStoppingScreenRecorder = false;
 let screenRecordFinalizePromise = null;
 let screenRecordBackend = null;
+const zoomStep = 0.1;
+const minZoomFactor = 0.3;
+const maxZoomFactor = 3;
 const tabs = new Map();
 const guestPreloadUrl = new URL("guest-preload.js", window.location.href).toString();
 const offlineUrl = new URL("offline.html", window.location.href).toString();
@@ -154,12 +157,79 @@ function setStatus(text) {
   statusText.textContent = text;
 }
 
+function getSiteNameFromUrl(rawUrl) {
+  const normalized = normalizeUrlInput(rawUrl);
+
+  try {
+    const parsed = new URL(normalized);
+    const hostname = parsed.hostname.replace(/^www\./, "");
+    if (hostname) {
+      return hostname;
+    }
+  } catch (_error) {}
+
+  return "AivudaOS";
+}
+
+function isGenericAivudaTitle(title) {
+  const normalized = String(title || "").trim().toLowerCase();
+  return normalized === "" || normalized === "aivudaos" || normalized === "aivuda os";
+}
+
+function resolveTabDisplayTitle(title, rawUrl) {
+  if (isGenericAivudaTitle(title)) {
+    return getSiteNameFromUrl(rawUrl);
+  }
+
+  return String(title || "").trim() || getSiteNameFromUrl(rawUrl);
+}
+
+function createDefaultTabIconSvg() {
+  const svgNs = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNs, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+
+  const rect = document.createElementNS(svgNs, "rect");
+  rect.setAttribute("x", "2");
+  rect.setAttribute("y", "2.75");
+  rect.setAttribute("width", "12");
+  rect.setAttribute("height", "10.5");
+  rect.setAttribute("rx", "2.25");
+  rect.setAttribute("stroke", "currentColor");
+  rect.setAttribute("stroke-width", "1.35");
+
+  const line = document.createElementNS(svgNs, "path");
+  line.setAttribute("d", "M2.75 5.25h10.5");
+  line.setAttribute("stroke", "currentColor");
+  line.setAttribute("stroke-width", "1.35");
+  line.setAttribute("stroke-linecap", "round");
+
+  svg.append(rect, line);
+  return svg;
+}
+
 function createTabButton(tab) {
   const button = document.createElement("button");
   button.className = "tab";
   button.type = "button";
   button.dataset.tabId = tab.id;
   button.setAttribute("role", "tab");
+
+  const main = document.createElement("span");
+  main.className = "tab-main";
+
+  const icon = document.createElement("span");
+  icon.className = "tab-icon";
+
+  const iconImg = document.createElement("img");
+  iconImg.alt = "";
+  iconImg.decoding = "async";
+  iconImg.referrerPolicy = "no-referrer";
+  iconImg.classList.add("hidden");
+
+  const fallbackIcon = createDefaultTabIconSvg();
 
   const title = document.createElement("span");
   title.className = "tab-title";
@@ -179,20 +249,107 @@ function createTabButton(tab) {
     activateTab(tab.id);
   });
 
-  button.append(title, close);
+  icon.append(iconImg, fallbackIcon);
+  main.append(icon, title);
+  button.append(main, close);
   tabsEl.appendChild(button);
+  tab.titleEl = title;
+  tab.iconImgEl = iconImg;
+  tab.iconFallbackEl = fallbackIcon;
   return button;
 }
 
 function updateTabTitle(tab, title) {
-  tab.title = title || "AivudaOS";
-  tab.button.querySelector(".tab-title").textContent = tab.title;
+  const nextTitle = resolveTabDisplayTitle(title, getTabUrl(tab));
+  tab.title = nextTitle;
+  if (tab.titleEl) {
+    tab.titleEl.textContent = nextTitle;
+  }
+  if (tab.button) {
+    tab.button.title = nextTitle;
+  }
   writeShellState();
+}
+
+function updateTabIcon(tab, faviconUrl) {
+  if (!tab?.iconImgEl || !tab.iconFallbackEl) {
+    return;
+  }
+
+  const nextUrl = typeof faviconUrl === "string" ? faviconUrl.trim() : "";
+  if (!nextUrl) {
+    tab.iconImgEl.removeAttribute("src");
+    tab.iconImgEl.classList.add("hidden");
+    tab.iconFallbackEl.classList.remove("hidden");
+    return;
+  }
+
+  tab.iconImgEl.onload = () => {
+    tab.iconImgEl.classList.remove("hidden");
+    tab.iconFallbackEl.classList.add("hidden");
+  };
+  tab.iconImgEl.onerror = () => {
+    tab.iconImgEl.classList.add("hidden");
+    tab.iconFallbackEl.classList.remove("hidden");
+  };
+  tab.iconImgEl.src = nextUrl;
 }
 
 function updateAddressFromActiveTab() {
   const tab = getActiveTab();
   addressInput.value = tab ? getTabUrl(tab) : "";
+}
+
+function clampZoomFactor(value) {
+  return Math.min(maxZoomFactor, Math.max(minZoomFactor, value));
+}
+
+function adjustActiveTabZoom(delta) {
+  const tab = getActiveTab();
+  if (!tab?.webview) {
+    return;
+  }
+
+  let currentZoom = 1;
+  try {
+    currentZoom = Number(tab.webview.getZoomFactor()) || 1;
+  } catch (_error) {}
+
+  const nextZoom = clampZoomFactor(Math.round((currentZoom + delta) * 100) / 100);
+  tab.webview.setZoomFactor(nextZoom);
+  setStatus(`Zoom ${Math.round(nextZoom * 100)}%`);
+}
+
+function resetActiveTabZoom() {
+  const tab = getActiveTab();
+  if (!tab?.webview) {
+    return;
+  }
+
+  tab.webview.setZoomFactor(1);
+  setStatus("Zoom 100%");
+}
+
+function isZoomInShortcut(event) {
+  return (
+    event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    (event.key === "+" || event.key === "=" || event.code === "Equal" || event.code === "NumpadAdd")
+  );
+}
+
+function isZoomOutShortcut(event) {
+  return (
+    event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    (event.key === "-" || event.code === "Minus" || event.code === "NumpadSubtract")
+  );
+}
+
+function isResetZoomShortcut(event) {
+  return event.ctrlKey && !event.altKey && !event.metaKey && (event.key === "0" || event.code === "Digit0" || event.code === "Numpad0");
 }
 
 function updateNavigationState() {
@@ -1076,10 +1233,13 @@ function createTab(rawUrl, options = {}) {
 
   const tab = {
     id,
-    title: "Loading...",
+    title: getSiteNameFromUrl(url),
     url,
     webview,
     button: null,
+    titleEl: null,
+    iconImgEl: null,
+    iconFallbackEl: null,
   };
 
   tab.button = createTabButton(tab);
@@ -1115,11 +1275,12 @@ function createTab(rawUrl, options = {}) {
 
   webview.addEventListener("did-start-loading", () => {
     setStatus("Loading");
-    updateTabTitle(tab, "Loading...");
+    updateTabTitle(tab, tab.title);
   });
 
   webview.addEventListener("did-stop-loading", () => {
     tab.url = getTabUrl(tab);
+    updateTabTitle(tab, tab.webview.getTitle());
     if (tab.id === activeTabId) {
       setStatus("Ready");
       updateAddressFromActiveTab();
@@ -1130,6 +1291,7 @@ function createTab(rawUrl, options = {}) {
 
   webview.addEventListener("did-navigate", () => {
     tab.url = getTabUrl(tab);
+    updateTabTitle(tab, tab.webview.getTitle());
     if (tab.id === activeTabId) {
       updateAddressFromActiveTab();
       updateNavigationState();
@@ -1139,6 +1301,7 @@ function createTab(rawUrl, options = {}) {
 
   webview.addEventListener("did-navigate-in-page", () => {
     tab.url = getTabUrl(tab);
+    updateTabTitle(tab, tab.webview.getTitle());
     if (tab.id === activeTabId) {
       updateAddressFromActiveTab();
       updateNavigationState();
@@ -1148,6 +1311,11 @@ function createTab(rawUrl, options = {}) {
 
   webview.addEventListener("page-title-updated", (event) => {
     updateTabTitle(tab, event.title);
+  });
+
+  webview.addEventListener("page-favicon-updated", (event) => {
+    const [faviconUrl] = Array.isArray(event.favicons) ? event.favicons : [];
+    updateTabIcon(tab, faviconUrl);
   });
 
   webview.addEventListener("did-fail-load", (event) => {
@@ -1250,6 +1418,29 @@ addressInput.addEventListener("keydown", (event) => {
   }
 });
 
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (isZoomInShortcut(event)) {
+      event.preventDefault();
+      adjustActiveTabZoom(zoomStep);
+      return;
+    }
+
+    if (isZoomOutShortcut(event)) {
+      event.preventDefault();
+      adjustActiveTabZoom(-zoomStep);
+      return;
+    }
+
+    if (isResetZoomShortcut(event)) {
+      event.preventDefault();
+      resetActiveTabZoom();
+    }
+  },
+  true,
+);
+
 window.aivudaShell.onNewTab((payload) => createTab(payload?.url || defaultUrl));
 window.aivudaShell.onOpenUrlInNewTab((payload) => {
   createTab(payload?.url || defaultUrl);
@@ -1260,6 +1451,7 @@ window.aivudaShell.onCloseCurrentTab(() => {
   }
 });
 window.aivudaShell.onReloadCurrentTab(reloadActiveTab);
+window.aivudaShell.onResetZoom(resetActiveTabZoom);
 window.aivudaShell.onShowBrowserChrome(() => {
   setChromeExpanded(true);
   addressInput.focus();
@@ -1281,6 +1473,12 @@ window.aivudaShell.onToggleDevtools(() => {
   if (tab) {
     tab.webview.isDevToolsOpened() ? tab.webview.closeDevTools() : tab.webview.openDevTools();
   }
+});
+window.aivudaShell.onZoomIn(() => {
+  adjustActiveTabZoom(zoomStep);
+});
+window.aivudaShell.onZoomOut(() => {
+  adjustActiveTabZoom(-zoomStep);
 });
 window.aivudaShell.onShowPerformanceOverlay(() => {
   setPerformanceOverlayVisible(true);

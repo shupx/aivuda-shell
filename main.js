@@ -490,6 +490,10 @@ function sendToShell(channel, payload) {
   mainWindow.webContents.send(channel, payload);
 }
 
+function zoomMenuAction(channel) {
+  return () => sendToShell(channel);
+}
+
 function createMenu() {
   const template = [
     {
@@ -537,9 +541,21 @@ function createMenu() {
           click: () => sendToShell("aivuda-shell:toggle-devtools"),
         },
         { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
+        {
+          label: "Actual Size",
+          accelerator: "CmdOrCtrl+0",
+          click: zoomMenuAction("aivuda-shell:reset-zoom"),
+        },
+        {
+          label: "Zoom In",
+          accelerator: "CmdOrCtrl+Plus",
+          click: zoomMenuAction("aivuda-shell:zoom-in"),
+        },
+        {
+          label: "Zoom Out",
+          accelerator: "CmdOrCtrl+-",
+          click: zoomMenuAction("aivuda-shell:zoom-out"),
+        },
         { type: "separator" },
         { role: "togglefullscreen" },
       ],

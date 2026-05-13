@@ -57,6 +57,9 @@ aivuda-shell-remove-desktop
 - `Ctrl+W`: close the current tab
 - `Ctrl+R`: reload the current tab
 - `Ctrl+L`: show or hide the tab bar
+- `Ctrl++` / `Ctrl+=`: zoom in the active tab
+- `Ctrl+-`: zoom out the active tab
+- `Ctrl+0`: reset zoom for the active tab
 - `Esc`: hide the tab bar
 
 ## Notes

@@ -65,6 +65,9 @@ For `https://` pages, the shell currently bypasses certificate validation errors
 - `Ctrl+W`: close the current tab.
 - `Ctrl+R`: reload the current tab.
 - `Ctrl+L`: toggle the Tab Bar and focus the address bar when shown.
+- `Ctrl++` or `Ctrl+=`: zoom in the active tab.
+- `Ctrl+-`: zoom out the active tab.
+- `Ctrl+0`: reset the active tab zoom.
 - `Esc`: hide the Tab Bar.
 - Use the address bar to navigate the active tab.
 - Links opened with `target="_blank"` or `window.open()` are routed into a new shell tab.
