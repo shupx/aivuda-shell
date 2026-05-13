@@ -257,28 +257,29 @@ async function injectPerformanceOverlay(tab, action) {
             "right:16px",
             "top:16px",
             "z-index:2147483647",
-            "min-width:82px",
+            "min-width:fit-content",
             "max-width:240px",
-            "padding:6px 8px",
-            "border:1px solid rgba(148,163,184,0.48)",
-            "border-radius:6px",
-            "background:rgba(255,255,255,0.72)",
+            "padding:2px 3px 2px 4px",
+            "border:1px solid rgba(148,163,184,0.22)",
+            "border-radius:10px",
+            "background:rgba(255,255,255,0.24)",
             "color:#102a43",
-            "font:11px/1.35 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
-            "box-shadow:0 8px 20px rgba(15,23,42,0.12)",
-            "backdrop-filter:blur(8px)",
+            "font:11px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+            "box-shadow:none",
+            "backdrop-filter:blur(4px)",
             "cursor:move",
             "user-select:none"
           ].join(";");
 
           overlay.innerHTML = [
-            '<div style="display:flex;align-items:center;gap:6px;">',
-            '<span style="font-weight:700;">FPS</span>',
-            '<span data-fps>--</span>',
-            '<button type="button" data-gpu-toggle title="GPU details" style="width:20px;height:20px;border:0;border-radius:4px;background:rgba(148,163,184,0.22);color:#334e68;font:inherit;line-height:1;cursor:pointer;">▾</button>',
-            '<button type="button" data-close title="Hide" style="width:20px;height:20px;border:0;border-radius:4px;background:transparent;color:#52606d;font:inherit;line-height:1;cursor:pointer;">×</button>',
+            '<div style="display:flex;align-items:center;gap:4px;">',
+            '<span style="display:inline-block;width:7px;height:7px;border-radius:999px;background:#98a2b3;flex:0 0 auto;"></span>',
+            '<span style="min-width:22px;font-weight:700;">FPS</span>',
+            '<span data-fps style="min-width:20px;font-variant-numeric:tabular-nums;font-weight:700;">--</span>',
+            '<button type="button" data-gpu-toggle title="GPU details" style="display:inline-grid;place-items:center;width:18px;height:18px;border:0;border-radius:999px;background:rgba(148,163,184,0.2);color:#334e68;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;">▾</button>',
+            '<button type="button" data-close title="Hide" style="display:inline-grid;place-items:center;width:12px;height:12px;border:0;background:transparent;color:#52606d;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;">×</button>',
             '</div>',
-            '<div data-gpu-row style="display:none;margin-top:5px;max-width:220px;overflow-wrap:anywhere;color:#334e68;">GPU: <span data-gpu>Checking...</span></div>'
+            '<div data-gpu-row style="display:none;margin-top:2px;padding:4px 6px 2px;border-top:1px solid rgba(148,163,184,0.35);border-radius:8px;background:rgba(255,255,255,0.2);max-width:220px;overflow-wrap:anywhere;color:#334e68;">GPU: <span data-gpu>Checking...</span></div>'
           ].join("");
 
           document.documentElement.appendChild(overlay);
@@ -491,7 +492,7 @@ function renderScreenRecordBar() {
       "right:16px",
       "bottom:16px",
       "z-index:2147483647",
-      "min-width:124px",
+      "min-width:fit-content",
       "max-width:320px",
       "padding:2px 3px 2px 4px",
       "border:1px solid rgba(148,163,184,0.22)",
