@@ -52,7 +52,9 @@ For `https://` pages, the shell currently bypasses certificate validation errors
 - `Esc`: hide the tab/address controls.
 - Use the address bar to navigate the active tab.
 - Links opened with `target="_blank"` or `window.open()` are routed into a new shell tab.
+- The shell restores the previous tab list, active tab, and top-bar expanded/collapsed state on the next launch.
 - The `Tools` menu can show, hide, or toggle a draggable FPS/GPU overlay inside the active page.
+- `Tools -> Clear Browser Data` clears the persistent browser session data and the saved shell state.
 
 The tab/address controls are hidden by default. Use the small button in the top-right corner, the `View` menu, or `Ctrl+L` to expand them.
 

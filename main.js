@@ -1,11 +1,16 @@
+const fs = require("node:fs");
 const path = require("node:path");
 
-const { app, BrowserWindow, ipcMain, Menu, webContents } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, session, webContents } = require("electron");
 
 const DEFAULT_URL = "http://127.0.0.1:80";
 
 let mainWindow = null;
 let initialUrl = DEFAULT_URL;
+let shellStatePath = "";
+let latestShellState = null;
+let isClosingMainWindow = false;
+let isFinalShellStateSaveInProgress = false;
 
 function normalizeUrl(value) {
   if (!value || typeof value !== "string") {
@@ -53,6 +58,81 @@ function shouldBypassCertificateValidation(rawUrl) {
   } catch (_error) {
     return false;
   }
+}
+
+function getShellStatePath() {
+  return path.join(app.getPath("userData"), "shell-state.json");
+}
+
+function readShellState() {
+  if (!shellStatePath) {
+    shellStatePath = getShellStatePath();
+  }
+
+  try {
+    const raw = fs.readFileSync(shellStatePath, "utf8");
+    const parsed = JSON.parse(raw);
+    latestShellState = parsed && typeof parsed === "object" ? parsed : null;
+    console.log("[aivuda-electron-shell] loaded shell state from", shellStatePath);
+    return latestShellState;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeShellState(state) {
+  if (!shellStatePath) {
+    shellStatePath = getShellStatePath();
+  }
+
+  latestShellState = state;
+
+  const parentDir = path.dirname(shellStatePath);
+  fs.mkdirSync(parentDir, { recursive: true });
+  fs.writeFileSync(shellStatePath, JSON.stringify(latestShellState, null, 2), "utf8");
+}
+
+function persistLatestShellState() {
+  if (!latestShellState) {
+    return;
+  }
+
+  const parentDir = path.dirname(shellStatePath || getShellStatePath());
+  fs.mkdirSync(parentDir, { recursive: true });
+  fs.writeFileSync(shellStatePath || getShellStatePath(), JSON.stringify(latestShellState, null, 2), "utf8");
+}
+
+async function saveFinalShellStateBeforeClose(windowToClose) {
+  if (!windowToClose || windowToClose.isDestroyed()) {
+    return;
+  }
+
+  try {
+    const state = await windowToClose.webContents.executeJavaScript(
+      "typeof window.__aivudaBuildShellState === 'function' ? window.__aivudaBuildShellState() : null",
+      true,
+    );
+
+    if (state) {
+      writeShellState(state);
+      return;
+    }
+  } catch (error) {
+    console.error("[aivuda-electron-shell] failed to read final shell state from renderer", error);
+  }
+
+  persistLatestShellState();
+}
+
+function clearShellState() {
+  if (!shellStatePath) {
+    shellStatePath = getShellStatePath();
+  }
+
+  latestShellState = null;
+  try {
+    fs.rmSync(shellStatePath, { force: true });
+  } catch (_error) {}
 }
 
 function sendToShell(channel, payload) {
@@ -133,6 +213,12 @@ function createMenu() {
           label: "Toggle FPS/GPU Overlay",
           click: () => sendToShell("aivuda-shell:toggle-performance-overlay"),
         },
+        { type: "separator" },
+        {
+          label: "Clear Browser Data",
+          accelerator: "CmdOrCtrl+Shift+Backspace",
+          click: () => sendToShell("aivuda-shell:clear-browser-data"),
+        },
       ],
     },
   ];
@@ -142,6 +228,7 @@ function createMenu() {
 
 function createMainWindow() {
   initialUrl = resolveInitialUrl();
+  isClosingMainWindow = false;
 
   mainWindow = new BrowserWindow({
     title: "AivudaOS",
@@ -159,7 +246,31 @@ function createMainWindow() {
     },
   });
 
+  mainWindow.on("close", async (event) => {
+    if (isClosingMainWindow) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (isFinalShellStateSaveInProgress) {
+      return;
+    }
+
+    isFinalShellStateSaveInProgress = true;
+    const windowToClose = mainWindow;
+    await saveFinalShellStateBeforeClose(windowToClose);
+    isClosingMainWindow = true;
+    isFinalShellStateSaveInProgress = false;
+
+    if (windowToClose && !windowToClose.isDestroyed()) {
+      windowToClose.close();
+    }
+  });
+
   mainWindow.on("closed", () => {
+    isClosingMainWindow = false;
+    isFinalShellStateSaveInProgress = false;
     mainWindow = null;
   });
 
@@ -176,9 +287,27 @@ function createMainWindow() {
 ipcMain.handle("aivuda-shell:get-startup", () => ({
   defaultUrl: DEFAULT_URL,
   initialUrl,
+  savedState: readShellState(),
 }));
 
 ipcMain.handle("aivuda-shell:get-gpu-status", () => app.getGPUFeatureStatus());
+
+ipcMain.handle("aivuda-shell:clear-browser-data", async () => {
+  const partitionSession = session.fromPartition("persist:aivuda-shell");
+  await partitionSession.clearStorageData();
+  await partitionSession.clearCache();
+  clearShellState();
+  return { ok: true };
+});
+ipcMain.handle("aivuda-shell:save-shell-state", (_event, state) => {
+  try {
+    writeShellState(state);
+    return { ok: true };
+  } catch (error) {
+    console.error("[aivuda-electron-shell] failed to save shell state", error);
+    return { ok: false, error: error.message };
+  }
+});
 
 ipcMain.on("aivuda-shell:register-webview", (_event, guestInstanceId) => {
   const guest = webContents.fromId(Number(guestInstanceId));
@@ -216,6 +345,14 @@ app.whenReady().then(() => {
       createMainWindow();
     }
   });
+});
+
+app.on("before-quit", () => {
+  try {
+    persistLatestShellState();
+  } catch (error) {
+    console.error("[aivuda-electron-shell] failed to persist latest shell state on quit", error);
+  }
 });
 
 app.on("window-all-closed", () => {

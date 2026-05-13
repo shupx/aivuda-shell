@@ -16,11 +16,61 @@ let nextTabId = 1;
 const tabs = new Map();
 const guestPreloadUrl = new URL("guest-preload.js", window.location.href).toString();
 const offlineUrl = new URL("offline.html", window.location.href).toString();
+let isRestoringShellState = true;
+const shellStateAutosaveIntervalMs = 1500;
+
+function normalizeSavedShellState(rawState) {
+  if (!rawState || typeof rawState !== "object") {
+    return null;
+  }
+
+  const tabs = Array.isArray(rawState.tabs)
+    ? rawState.tabs.filter((tab) => tab && typeof tab.url === "string" && tab.url.trim())
+    : [];
+  const activeTabId = typeof rawState.activeTabId === "string" ? rawState.activeTabId : null;
+  const chromeExpanded = rawState.chromeExpanded === true;
+
+  return {
+    tabs,
+    activeTabId,
+    chromeExpanded,
+  };
+}
+
+function buildShellStatePayload() {
+  return {
+    activeTabId,
+    chromeExpanded: shellEl.classList.contains("expanded"),
+    tabs: Array.from(tabs.values()).map((tab) => ({
+      id: tab.id,
+      title: tab.title,
+      url: getTabUrl(tab),
+    })),
+  };
+}
+
+window.__aivudaBuildShellState = buildShellStatePayload;
+
+function writeShellState() {
+  if (isRestoringShellState) {
+    return Promise.resolve();
+  }
+
+  return window.aivudaShell.saveShellState(buildShellStatePayload()).catch((error) => {
+    console.warn("[aivuda-electron-shell] failed to save shell state", error);
+  });
+}
+
+function finishShellStateRestore() {
+  isRestoringShellState = false;
+  writeShellState();
+}
 
 function setChromeExpanded(isExpanded) {
   shellEl.classList.toggle("expanded", isExpanded);
   expandChromeButton.textContent = isExpanded ? "⌃" : "☰";
   expandChromeButton.title = isExpanded ? "Hide tabs and address bar" : "Show tabs and address bar";
+  writeShellState();
 }
 
 function normalizeUrlInput(value) {
@@ -42,6 +92,18 @@ function normalizeUrlInput(value) {
 
 function getActiveTab() {
   return activeTabId ? tabs.get(activeTabId) : null;
+}
+
+function getTabUrl(tab) {
+  if (!tab?.webview) {
+    return tab?.url || defaultUrl;
+  }
+
+  try {
+    return tab.webview.getURL() || tab.url;
+  } catch (_error) {
+    return tab.url;
+  }
 }
 
 function setStatus(text) {
@@ -81,17 +143,23 @@ function createTabButton(tab) {
 function updateTabTitle(tab, title) {
   tab.title = title || "AivudaOS";
   tab.button.querySelector(".tab-title").textContent = tab.title;
+  writeShellState();
 }
 
 function updateAddressFromActiveTab() {
   const tab = getActiveTab();
-  addressInput.value = tab ? tab.webview.getURL() || tab.url : "";
+  addressInput.value = tab ? getTabUrl(tab) : "";
 }
 
 function updateNavigationState() {
   const tab = getActiveTab();
-  backButton.disabled = !tab || !tab.webview.canGoBack();
-  forwardButton.disabled = !tab || !tab.webview.canGoForward();
+  try {
+    backButton.disabled = !tab || !tab.webview.canGoBack();
+    forwardButton.disabled = !tab || !tab.webview.canGoForward();
+  } catch (_error) {
+    backButton.disabled = true;
+    forwardButton.disabled = true;
+  }
 }
 
 function updateActiveClasses() {
@@ -261,9 +329,14 @@ async function injectPerformanceOverlay(tab, action) {
   });
 }
 
-function createTab(rawUrl) {
-  const id = `tab-${nextTabId}`;
-  nextTabId += 1;
+function createTab(rawUrl, options = {}) {
+  const id = options.id || `tab-${nextTabId}`;
+  const numericId = Number(String(id).replace(/^tab-/, ""));
+  if (Number.isFinite(numericId)) {
+    nextTabId = Math.max(nextTabId, numericId + 1);
+  } else {
+    nextTabId += 1;
+  }
 
   const url = normalizeUrlInput(rawUrl);
   const webview = document.createElement("webview");
@@ -282,6 +355,7 @@ function createTab(rawUrl) {
   tab.button = createTabButton(tab);
   tabs.set(id, tab);
   stackEl.appendChild(webview);
+  writeShellState();
 
   webview.addEventListener("dom-ready", () => {
     if (typeof webview.getWebContentsId === "function") {
@@ -306,25 +380,31 @@ function createTab(rawUrl) {
   });
 
   webview.addEventListener("did-stop-loading", () => {
+    tab.url = getTabUrl(tab);
     if (tab.id === activeTabId) {
       setStatus("Ready");
       updateAddressFromActiveTab();
       updateNavigationState();
     }
+    writeShellState();
   });
 
   webview.addEventListener("did-navigate", () => {
+    tab.url = getTabUrl(tab);
     if (tab.id === activeTabId) {
       updateAddressFromActiveTab();
       updateNavigationState();
     }
+    writeShellState();
   });
 
   webview.addEventListener("did-navigate-in-page", () => {
+    tab.url = getTabUrl(tab);
     if (tab.id === activeTabId) {
       updateAddressFromActiveTab();
       updateNavigationState();
     }
+    writeShellState();
   });
 
   webview.addEventListener("page-title-updated", (event) => {
@@ -354,6 +434,7 @@ function activateTab(id) {
   updateActiveClasses();
   updateAddressFromActiveTab();
   updateNavigationState();
+  writeShellState();
 }
 
 function closeTab(id) {
@@ -365,6 +446,7 @@ function closeTab(id) {
   tab.button.remove();
   tab.webview.remove();
   tabs.delete(id);
+  writeShellState();
 
   if (activeTabId === id) {
     const next = tabs.keys().next().value;
@@ -394,6 +476,7 @@ function navigateActiveTab(rawUrl) {
   tab.url = nextUrl;
   tab.webview.src = nextUrl;
   updateAddressFromActiveTab();
+  writeShellState();
 }
 
 expandChromeButton.addEventListener("click", () => {
@@ -464,8 +547,35 @@ window.aivudaShell.onHidePerformanceOverlay(() => {
 window.aivudaShell.onTogglePerformanceOverlay(() => {
   injectPerformanceOverlay(getActiveTab(), "toggle");
 });
+window.aivudaShell.onClearBrowserData(async () => {
+  await window.aivudaShell.clearBrowserData();
+  window.location.reload();
+});
+
+window.addEventListener("pagehide", () => {
+  writeShellState();
+});
+
+window.setInterval(() => {
+  writeShellState();
+}, shellStateAutosaveIntervalMs);
 
 window.aivudaShell.getStartup().then((startup) => {
   defaultUrl = startup.defaultUrl || defaultUrl;
+  const savedState = normalizeSavedShellState(startup.savedState);
+  if (savedState) {
+    setChromeExpanded(savedState.chromeExpanded);
+    const restoredTabs = savedState.tabs.length > 0 ? savedState.tabs : [{ url: startup.initialUrl || defaultUrl }];
+    for (const tabState of restoredTabs) {
+      createTab(tabState.url, { id: tabState.id });
+    }
+    if (savedState.activeTabId && tabs.has(savedState.activeTabId)) {
+      activateTab(savedState.activeTabId);
+    }
+    finishShellStateRestore();
+    return;
+  }
+
   createTab(startup.initialUrl || defaultUrl);
+  finishShellStateRestore();
 });

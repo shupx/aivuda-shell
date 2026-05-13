@@ -1,9 +1,12 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("aivudaShell", {
+  clearBrowserData: () => ipcRenderer.invoke("aivuda-shell:clear-browser-data"),
   getGpuStatus: () => ipcRenderer.invoke("aivuda-shell:get-gpu-status"),
   getStartup: () => ipcRenderer.invoke("aivuda-shell:get-startup"),
+  saveShellState: (state) => ipcRenderer.invoke("aivuda-shell:save-shell-state", state),
   onCloseCurrentTab: (callback) => ipcRenderer.on("aivuda-shell:close-current-tab", callback),
+  onClearBrowserData: (callback) => ipcRenderer.on("aivuda-shell:clear-browser-data", callback),
   onHideBrowserChrome: (callback) => ipcRenderer.on("aivuda-shell:hide-browser-chrome", callback),
   onHidePerformanceOverlay: (callback) => ipcRenderer.on("aivuda-shell:hide-performance-overlay", callback),
   onNewTab: (callback) => ipcRenderer.on("aivuda-shell:new-tab", (_event, payload) => callback(payload)),
