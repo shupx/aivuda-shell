@@ -23,6 +23,7 @@ let isClosingMainWindow = false;
 let isFinalShellStateSaveInProgress = false;
 let activeFfmpegRecording = null;
 const certificateBypassConfiguredSessions = new WeakSet();
+const popupWindowOpenConfiguredContents = new WeakSet();
 
 function normalizeUrl(value) {
   if (!value || typeof value !== "string") {
@@ -509,6 +510,57 @@ function sendToShell(channel, payload) {
   mainWindow.webContents.send(channel, payload);
 }
 
+function getOwningBrowserWindow(sourceContents) {
+  if (!sourceContents) {
+    return mainWindow;
+  }
+
+  const directOwner = BrowserWindow.fromWebContents(sourceContents);
+  if (directOwner) {
+    return directOwner;
+  }
+
+  const hostContents = sourceContents.hostWebContents;
+  if (hostContents) {
+    return BrowserWindow.fromWebContents(hostContents) || mainWindow;
+  }
+
+  return mainWindow;
+}
+
+function buildPopupWindowOptions(sourceContents) {
+  const ownerWindow = getOwningBrowserWindow(sourceContents);
+
+  return {
+    show: true,
+    title: "AivudaOS",
+    icon: APP_ICON_PATH,
+    backgroundColor: "#ffffff",
+    parent: ownerWindow && !ownerWindow.isDestroyed() ? ownerWindow : undefined,
+  };
+}
+
+function configurePopupWindowHandlers(sourceContents) {
+  if (!sourceContents || popupWindowOpenConfiguredContents.has(sourceContents)) {
+    return;
+  }
+
+  popupWindowOpenConfiguredContents.add(sourceContents);
+
+  sourceContents.setWindowOpenHandler(() => ({
+    action: "allow",
+    overrideBrowserWindowOptions: buildPopupWindowOptions(sourceContents),
+  }));
+
+  sourceContents.on("did-create-window", (childWindow) => {
+    if (!childWindow || childWindow.isDestroyed()) {
+      return;
+    }
+
+    configurePopupWindowHandlers(childWindow.webContents);
+  });
+}
+
 function zoomMenuAction(channel) {
   return () => sendToShell(channel);
 }
@@ -676,10 +728,7 @@ function createMainWindow() {
   });
 
   mainWindow.webContents.on("did-attach-webview", (_event, webContentsView) => {
-    webContentsView.setWindowOpenHandler(({ url }) => {
-      sendToShell("aivuda-shell:open-url-in-new-tab", { url });
-      return { action: "deny" };
-    });
+    configurePopupWindowHandlers(webContentsView);
   });
 
   mainWindow.loadFile(path.join(__dirname, "shell.html"));
@@ -1016,10 +1065,7 @@ ipcMain.on("aivuda-shell:register-webview", (_event, guestInstanceId) => {
     return;
   }
 
-  guest.setWindowOpenHandler(({ url }) => {
-    sendToShell("aivuda-shell:open-url-in-new-tab", { url });
-    return { action: "deny" };
-  });
+  configurePopupWindowHandlers(guest);
 });
 
 app.whenReady().then(() => {

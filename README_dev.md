@@ -70,7 +70,7 @@ For `https://` pages and `wss://` connections, the shell currently bypasses cert
 - `Ctrl+0`: reset the active tab zoom.
 - `Esc`: hide the Tab Bar.
 - Use the address bar to navigate the active tab.
-- Links opened with `target="_blank"` or `window.open()` are routed into a new shell tab.
+- Links opened with `target="_blank"` or `window.open()` are allowed to open in independent child windows.
 - The shell restores the previous tab list, active tab, top-bar expanded/collapsed state, and window size/position on the next launch.
 - The `Tools` menu can show the draggable FPS/GPU overlay inside the active page.
 - The `Tools` menu can show a compact draggable screen-record bar inside the shell and record the current Aivuda window to a `.webm` file.
