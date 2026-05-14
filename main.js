@@ -22,6 +22,7 @@ let latestShellState = null;
 let isClosingMainWindow = false;
 let isFinalShellStateSaveInProgress = false;
 let activeFfmpegRecording = null;
+const certificateBypassConfiguredSessions = new WeakSet();
 
 function normalizeUrl(value) {
   if (!value || typeof value !== "string") {
@@ -65,10 +66,28 @@ function resolveInitialUrl() {
 
 function shouldBypassCertificateValidation(rawUrl) {
   try {
-    return new URL(rawUrl).protocol === "https:";
+    const protocol = new URL(rawUrl).protocol;
+    return protocol === "https:" || protocol === "wss:";
   } catch (_error) {
     return false;
   }
+}
+
+function installCertificateValidationBypass(targetSession, label = "session") {
+  if (!targetSession || certificateBypassConfiguredSessions.has(targetSession)) {
+    return;
+  }
+
+  targetSession.setCertificateVerifyProc((request, callback) => {
+    console.warn(
+      "[aivuda-shell] bypassing certificate verification for",
+      `${label}:${request.hostname || "unknown-host"}`,
+      `error=${request.errorCode}`,
+      request.certificate?.issuerName ? `issuer=${request.certificate.issuerName}` : "",
+    );
+    callback(0);
+  });
+  certificateBypassConfiguredSessions.add(targetSession);
 }
 
 function getShellStatePath() {
@@ -595,6 +614,9 @@ function createMainWindow() {
   isClosingMainWindow = false;
   const savedState = readShellState();
   const savedWindowState = normalizeWindowState(savedState);
+  const persistedShellSession = session.fromPartition("persist:aivuda-shell");
+  installCertificateValidationBypass(session.defaultSession, "default-session");
+  installCertificateValidationBypass(persistedShellSession, "persist:aivuda-shell");
 
   mainWindow = new BrowserWindow({
     title: "AivudaOS",
@@ -672,9 +694,9 @@ ipcMain.handle("aivuda-shell:get-startup", () => ({
 ipcMain.handle("aivuda-shell:get-gpu-status", () => app.getGPUFeatureStatus());
 
 ipcMain.handle("aivuda-shell:clear-browser-data", async () => {
-  const partitionSession = session.fromPartition("persist:aivuda-shell");
-  await partitionSession.clearStorageData();
-  await partitionSession.clearCache();
+  const persistedShellSession = session.fromPartition("persist:aivuda-shell");
+  await persistedShellSession.clearStorageData();
+  await persistedShellSession.clearCache();
   clearShellState();
   return { ok: true };
 });

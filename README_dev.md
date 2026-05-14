@@ -57,7 +57,7 @@ npm install -g @aivuda/aivuda-shell
 
 ## HTTPS Certificates
 
-For `https://` pages, the shell currently bypasses certificate validation errors and only logs a warning in the Electron process. This is intended for local/self-signed AivudaOS-style deployments where opening the page matters more than strict TLS verification.
+For `https://` pages and `wss://` connections, the shell currently bypasses certificate validation errors and only logs a warning in the Electron process. This is intended for local/self-signed AivudaOS-style deployments where opening the page matters more than strict TLS verification.
 
 ## Tabs and Tools
 
