@@ -43,6 +43,83 @@ const offlineUrl = new URL("offline.html", window.location.href).toString();
 let isRestoringShellState = true;
 const shellStateAutosaveIntervalMs = 1500;
 
+function clampOverlayCoordinate(value, maxValue) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(Math.max(0, maxValue), value));
+}
+
+function normalizeRelativeOverlayPosition(rawPosition) {
+  if (!rawPosition || typeof rawPosition !== "object") {
+    return null;
+  }
+
+  if (Number.isFinite(rawPosition.xRatio) && Number.isFinite(rawPosition.yRatio)) {
+    return {
+      xRatio: Math.max(0, Math.min(1, rawPosition.xRatio)),
+      yRatio: Math.max(0, Math.min(1, rawPosition.yRatio)),
+    };
+  }
+
+  if (Number.isFinite(rawPosition.left) && Number.isFinite(rawPosition.top)) {
+    return {
+      left: rawPosition.left,
+      top: rawPosition.top,
+    };
+  }
+
+  return null;
+}
+
+function resolveOverlayPosition(position, elementWidth, elementHeight, viewportWidth = window.innerWidth, viewportHeight = window.innerHeight) {
+  if (!position) {
+    return null;
+  }
+
+  const maxLeft = Math.max(0, viewportWidth - elementWidth);
+  const maxTop = Math.max(0, viewportHeight - elementHeight);
+
+  if (Number.isFinite(position.xRatio) && Number.isFinite(position.yRatio)) {
+    return {
+      left: clampOverlayCoordinate(position.xRatio * maxLeft, maxLeft),
+      top: clampOverlayCoordinate(position.yRatio * maxTop, maxTop),
+    };
+  }
+
+  if (Number.isFinite(position.left) && Number.isFinite(position.top)) {
+    return {
+      left: clampOverlayCoordinate(position.left, maxLeft),
+      top: clampOverlayCoordinate(position.top, maxTop),
+    };
+  }
+
+  return null;
+}
+
+function createRelativeOverlayPosition(left, top, elementWidth, elementHeight, viewportWidth = window.innerWidth, viewportHeight = window.innerHeight) {
+  const maxLeft = Math.max(0, viewportWidth - elementWidth);
+  const maxTop = Math.max(0, viewportHeight - elementHeight);
+  const normalizedLeft = clampOverlayCoordinate(left, maxLeft);
+  const normalizedTop = clampOverlayCoordinate(top, maxTop);
+
+  return {
+    xRatio: maxLeft > 0 ? normalizedLeft / maxLeft : 0,
+    yRatio: maxTop > 0 ? normalizedTop / maxTop : 0,
+  };
+}
+
+function isLegacyAbsoluteOverlayPosition(position) {
+  return Boolean(
+    position &&
+      Number.isFinite(position.left) &&
+      Number.isFinite(position.top) &&
+      !Number.isFinite(position.xRatio) &&
+      !Number.isFinite(position.yRatio),
+  );
+}
+
 function normalizeSavedShellState(rawState) {
   if (!rawState || typeof rawState !== "object") {
     return null;
@@ -62,14 +139,7 @@ function normalizeSavedShellState(rawState) {
         ? "ffmpeg-x11"
         : "ffmpeg";
   const screenRecordBarPosition =
-    rawState.screenRecordBarPosition &&
-    Number.isFinite(rawState.screenRecordBarPosition.left) &&
-    Number.isFinite(rawState.screenRecordBarPosition.top)
-      ? {
-          left: rawState.screenRecordBarPosition.left,
-          top: rawState.screenRecordBarPosition.top,
-        }
-      : null;
+    normalizeRelativeOverlayPosition(rawState.screenRecordBarPosition);
 
   return {
     tabs,
@@ -404,7 +474,90 @@ async function injectPerformanceOverlay(tab, action) {
         const electronGpuStatus = ${JSON.stringify(gpuStatus)};
         const id = "aivuda-performance-overlay";
         const storageKey = "aivuda.performanceOverlay.position.v1";
+        const resizeHandlerKey = "__aivudaPerformanceOverlayResizeHandler";
         let overlay = document.getElementById(id);
+
+        const clampCoordinate = (value, maxValue) => {
+          if (!Number.isFinite(value)) {
+            return 0;
+          }
+
+          return Math.max(0, Math.min(Math.max(0, maxValue), value));
+        };
+
+        const normalizeSavedPosition = (value) => {
+          if (!value || typeof value !== "object") {
+            return null;
+          }
+
+          if (Number.isFinite(value.xRatio) && Number.isFinite(value.yRatio)) {
+            return {
+              xRatio: Math.max(0, Math.min(1, value.xRatio)),
+              yRatio: Math.max(0, Math.min(1, value.yRatio)),
+            };
+          }
+
+          if (Number.isFinite(value.left) && Number.isFinite(value.top)) {
+            return {
+              left: value.left,
+              top: value.top,
+            };
+          }
+
+          return null;
+        };
+
+        const resolvePosition = (value, element) => {
+          const normalized = normalizeSavedPosition(value);
+          if (!normalized || !element) {
+            return null;
+          }
+
+          const maxLeft = Math.max(0, window.innerWidth - element.offsetWidth);
+          const maxTop = Math.max(0, window.innerHeight - element.offsetHeight);
+          if (Number.isFinite(normalized.xRatio) && Number.isFinite(normalized.yRatio)) {
+            return {
+              left: clampCoordinate(normalized.xRatio * maxLeft, maxLeft),
+              top: clampCoordinate(normalized.yRatio * maxTop, maxTop),
+            };
+          }
+
+          return {
+            left: clampCoordinate(normalized.left, maxLeft),
+            top: clampCoordinate(normalized.top, maxTop),
+          };
+        };
+
+        const buildRelativePosition = (left, top, element) => {
+          const maxLeft = Math.max(0, window.innerWidth - element.offsetWidth);
+          const maxTop = Math.max(0, window.innerHeight - element.offsetHeight);
+          const normalizedLeft = clampCoordinate(left, maxLeft);
+          const normalizedTop = clampCoordinate(top, maxTop);
+          return {
+            xRatio: maxLeft > 0 ? normalizedLeft / maxLeft : 0,
+            yRatio: maxTop > 0 ? normalizedTop / maxTop : 0,
+          };
+        };
+
+        const applySavedPosition = (element) => {
+          let savedPosition = null;
+          try {
+            savedPosition = JSON.parse(localStorage.getItem(storageKey) || "null");
+          } catch (_error) {}
+
+          const normalized = normalizeSavedPosition(savedPosition);
+          const resolved = resolvePosition(normalized, element);
+          if (!normalized || !resolved) {
+            return;
+          }
+
+          element.style.left = resolved.left + "px";
+          element.style.top = resolved.top + "px";
+          element.style.right = "auto";
+          if (Number.isFinite(normalized.left) && Number.isFinite(normalized.top)) {
+            localStorage.setItem(storageKey, JSON.stringify(buildRelativePosition(resolved.left, resolved.top, element)));
+          }
+        };
 
         if (action === "hide") {
           if (overlay) overlay.remove();
@@ -439,26 +592,18 @@ async function injectPerformanceOverlay(tab, action) {
           ].join(";");
 
           overlay.innerHTML = [
-            '<div style="display:flex;align-items:center;gap:4px;">',
+            '<div style="display:flex;align-items:center;gap:4px;min-height:22px;">',
             '<span style="display:inline-block;width:7px;height:7px;border-radius:999px;background:#98a2b3;flex:0 0 auto;"></span>',
             '<span style="min-width:22px;font-weight:700;">FPS</span>',
             '<span data-fps style="min-width:20px;font-variant-numeric:tabular-nums;font-weight:700;">--</span>',
-            '<button type="button" data-gpu-toggle title="GPU details" style="display:inline-grid;place-items:center;width:18px;height:18px;border:0;border-radius:999px;background:rgba(148,163,184,0.2);color:#334e68;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;">▾</button>',
+            '<button type="button" data-gpu-toggle title="GPU details" style="display:inline-grid;place-items:center;width:22px;height:22px;border:0;border-radius:999px;background:rgba(148,163,184,0.2);color:#334e68;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;">▾</button>',
             '<button type="button" data-close title="Hide" style="display:inline-grid;place-items:center;width:12px;height:12px;border:0;background:transparent;color:#52606d;font:inherit;font-size:11px;line-height:1;cursor:pointer;padding:0;">×</button>',
             '</div>',
             '<div data-gpu-row style="display:none;margin-top:2px;padding:4px 6px 2px;border-top:1px solid rgba(148,163,184,0.35);border-radius:8px;background:rgba(255,255,255,0.2);max-width:220px;overflow-wrap:anywhere;color:#334e68;">GPU: <span data-gpu>Checking...</span></div>'
           ].join("");
 
           document.documentElement.appendChild(overlay);
-
-          try {
-            const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
-            if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
-              overlay.style.left = saved.left + "px";
-              overlay.style.top = saved.top + "px";
-              overlay.style.right = "auto";
-            }
-          } catch (_error) {}
+          applySavedPosition(overlay);
 
           const closeButton = overlay.querySelector("[data-close]");
           const gpuToggleButton = overlay.querySelector("[data-gpu-toggle]");
@@ -500,8 +645,26 @@ async function injectPerformanceOverlay(tab, action) {
             if (!drag) return;
             drag = null;
             const rect = overlay.getBoundingClientRect();
-            localStorage.setItem(storageKey, JSON.stringify({ left: rect.left, top: rect.top }));
+            localStorage.setItem(storageKey, JSON.stringify(buildRelativePosition(rect.left, rect.top, overlay)));
           });
+
+          overlay.addEventListener("pointercancel", () => {
+            drag = null;
+          });
+        } else {
+          applySavedPosition(overlay);
+        }
+
+        if (!window[resizeHandlerKey]) {
+          window[resizeHandlerKey] = () => {
+            const activeOverlay = document.getElementById(id);
+            if (!activeOverlay) {
+              return;
+            }
+
+            applySavedPosition(activeOverlay);
+          };
+          window.addEventListener("resize", window[resizeHandlerKey]);
         }
 
         const fpsEl = overlay.querySelector("[data-fps]");
@@ -564,18 +727,19 @@ function formatElapsedTime(elapsedMs) {
 }
 
 function setScreenRecordBarPosition(position) {
+  const normalizedPosition = normalizeRelativeOverlayPosition(position);
+  if (!normalizedPosition) {
+    return;
+  }
+
   if (
-    position &&
-    Number.isFinite(position.left) &&
-    Number.isFinite(position.top) &&
-    (!screenRecordBarPosition ||
-      screenRecordBarPosition.left !== position.left ||
-      screenRecordBarPosition.top !== position.top)
+    !screenRecordBarPosition ||
+    screenRecordBarPosition.xRatio !== normalizedPosition.xRatio ||
+    screenRecordBarPosition.yRatio !== normalizedPosition.yRatio ||
+    screenRecordBarPosition.left !== normalizedPosition.left ||
+    screenRecordBarPosition.top !== normalizedPosition.top
   ) {
-    screenRecordBarPosition = {
-      left: position.left,
-      top: position.top,
-    };
+    screenRecordBarPosition = normalizedPosition;
     writeShellState();
   }
 }
@@ -635,8 +799,25 @@ function updateScreenRecordBarLayout() {
   }
 
   if (screenRecordBarPosition) {
-    screenRecordBarEl.style.left = `${screenRecordBarPosition.left}px`;
-    screenRecordBarEl.style.top = `${screenRecordBarPosition.top}px`;
+    const resolvedPosition = resolveOverlayPosition(
+      screenRecordBarPosition,
+      screenRecordBarEl.offsetWidth,
+      screenRecordBarEl.offsetHeight,
+    );
+    if (resolvedPosition) {
+      screenRecordBarEl.style.left = `${resolvedPosition.left}px`;
+      screenRecordBarEl.style.top = `${resolvedPosition.top}px`;
+      if (isLegacyAbsoluteOverlayPosition(screenRecordBarPosition)) {
+        setScreenRecordBarPosition(
+          createRelativeOverlayPosition(
+            resolvedPosition.left,
+            resolvedPosition.top,
+            screenRecordBarEl.offsetWidth,
+            screenRecordBarEl.offsetHeight,
+          ),
+        );
+      }
+    }
     screenRecordBarEl.style.right = "auto";
     screenRecordBarEl.style.bottom = "auto";
   }
@@ -705,7 +886,9 @@ function renderScreenRecordBar() {
       }
       drag = null;
       const rect = bar.getBoundingClientRect();
-      setScreenRecordBarPosition({ left: rect.left, top: rect.top });
+      setScreenRecordBarPosition(
+        createRelativeOverlayPosition(rect.left, rect.top, rect.width, rect.height),
+      );
     };
 
     bar.addEventListener("pointerup", finishDrag);
@@ -1502,6 +1685,10 @@ window.aivudaShell.onClearBrowserData(async () => {
 
 window.addEventListener("pagehide", () => {
   writeShellState();
+});
+
+window.addEventListener("resize", () => {
+  updateScreenRecordBarLayout();
 });
 
 window.setInterval(() => {
