@@ -31,6 +31,7 @@ let screenRecorderChunks = [];
 let screenRecorderOutputPath = "";
 let screenRecorderOutputDir = "";
 let screenRecorderLastSavedPath = "";
+let defaultScreenRecordingsDir = "";
 let isStoppingScreenRecorder = false;
 let screenRecordFinalizePromise = null;
 let screenRecordBackend = null;
@@ -42,6 +43,15 @@ const guestPreloadUrl = new URL("guest-preload.js", window.location.href).toStri
 const offlineUrl = new URL("offline.html", window.location.href).toString();
 let isRestoringShellState = true;
 const shellStateAutosaveIntervalMs = 1500;
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
 
 function clampOverlayCoordinate(value, maxValue) {
   if (!Number.isFinite(value)) {
@@ -903,7 +913,9 @@ function renderScreenRecordBar() {
   const isPaused = screenRecordStatus === "paused";
   const isBusy = screenRecordStatus === "stopping";
   const elapsedText = formatElapsedTime(screenRecordElapsedMs);
-  const canExpand = Boolean(screenRecordStatusText || screenRecorderLastSavedPath || screenRecordStatus === "error");
+  const recordingFolderPath = screenRecorderOutputDir || defaultScreenRecordingsDir;
+  const escapedRecordingFolderPath = recordingFolderPath ? escapeHtml(recordingFolderPath) : "";
+  const canExpand = Boolean(screenRecordStatusText || screenRecorderLastSavedPath || recordingFolderPath || screenRecordStatus === "error");
   const detailsOpen = screenRecordDetailsExpanded && canExpand;
   const statusTone = screenRecordStatus === "error" ? "#b42318" : screenRecordStatus === "saved" ? "#0f7b6c" : "#486581";
   const indicatorColor = isRecording ? "#d92d20" : isPaused ? "#d97706" : screenRecordStatus === "error" ? "#b42318" : "#98a2b3";
@@ -917,6 +929,8 @@ function renderScreenRecordBar() {
     "display:inline-grid;place-items:center;width:22px;height:22px;border:0;border-radius:999px;background:rgba(203,213,225,0.2);color:#98a2b3;font:inherit;font-size:11px;line-height:1;cursor:not-allowed;padding:0;";
   const disabledChromeButtonStyle =
     "display:inline-grid;place-items:center;width:12px;height:12px;border:0;background:transparent;color:#98a2b3;font:inherit;font-size:11px;line-height:1;cursor:not-allowed;padding:0;";
+  const actionLinkStyle = "border:0;background:transparent;padding:0;color:#0f6ad8;font:inherit;cursor:pointer;text-decoration:underline;";
+  const escapedSavedPath = screenRecorderLastSavedPath ? escapeHtml(screenRecorderLastSavedPath) : "";
 
   screenRecordBarEl.innerHTML = [
     `<div style="display:flex;align-items:center;gap:4px;cursor:move;${detailsOpen ? "margin-bottom:4px;" : ""}">`,
@@ -951,7 +965,24 @@ function renderScreenRecordBar() {
           `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:${statusTone};">${screenRecordStatus}</div>`,
           `<div style="margin-top:2px;font-size:11px;color:#334e68;">${screenRecordStatusText || "No details"}</div>`,
           screenRecorderLastSavedPath
-            ? `<div style="margin-top:4px;font-size:10px;color:#486581;">${screenRecorderLastSavedPath}</div>`
+            ? [
+                '<div style="margin-top:4px;font-size:10px;color:#486581;">',
+                `<button type="button" data-open-recording-file title="Open recorded video" style="${actionLinkStyle};display:block;max-width:100%;text-align:left;overflow-wrap:anywhere;">${escapedSavedPath}</button>`,
+                '<div style="margin-top:3px;">',
+                `<button type="button" data-open-recording-folder title="Show in folder" style="${actionLinkStyle}">Open folder</button>`,
+                "</div>",
+                "</div>",
+              ].join("")
+            : "",
+          !screenRecorderLastSavedPath && recordingFolderPath
+            ? [
+                '<div style="margin-top:4px;font-size:10px;color:#486581;">',
+                `<div style="max-width:100%;overflow-wrap:anywhere;">${escapedRecordingFolderPath}</div>`,
+                '<div style="margin-top:3px;">',
+                `<button type="button" data-open-recording-folder title="Open recordings folder" style="${actionLinkStyle}">Open folder</button>`,
+                "</div>",
+                "</div>",
+              ].join("")
             : "",
           "</div>",
         ].join("")
@@ -963,6 +994,8 @@ function renderScreenRecordBar() {
   const pauseButton = screenRecordBarEl.querySelector("[data-pause-screen-record]");
   const stopButton = screenRecordBarEl.querySelector("[data-stop-screen-record]");
   const expandButton = screenRecordBarEl.querySelector("[data-expand-screen-record]");
+  const openRecordingFileButton = screenRecordBarEl.querySelector("[data-open-recording-file]");
+  const openRecordingFolderButton = screenRecordBarEl.querySelector("[data-open-recording-folder]");
   const modeButtons = screenRecordBarEl.querySelectorAll("[data-screen-record-mode]");
   const modeButtonTitles = {
     native: "Native\nDoes not require installing FFmpeg\nRecorded files are usually larger\nOutput format: WebM",
@@ -1020,6 +1053,30 @@ function renderScreenRecordBar() {
     expandButton.addEventListener("click", () => {
       screenRecordDetailsExpanded = !screenRecordDetailsExpanded;
       renderScreenRecordBar();
+    });
+  }
+
+  if (openRecordingFileButton) {
+    openRecordingFileButton.addEventListener("click", async () => {
+      const response = await window.aivudaShell.openPath(screenRecorderLastSavedPath);
+      if (!response?.ok) {
+        setScreenRecordState("error", `Open file failed: ${response?.error || "Unknown error"}`);
+        screenRecordDetailsExpanded = true;
+        renderScreenRecordBar();
+      }
+    });
+  }
+
+  if (openRecordingFolderButton) {
+    openRecordingFolderButton.addEventListener("click", async () => {
+      const response = screenRecorderLastSavedPath
+        ? await window.aivudaShell.showItemInFolder(screenRecorderLastSavedPath)
+        : await window.aivudaShell.openPath(recordingFolderPath);
+      if (!response?.ok) {
+        setScreenRecordState("error", `Open folder failed: ${response?.error || "Unknown error"}`);
+        screenRecordDetailsExpanded = true;
+        renderScreenRecordBar();
+      }
     });
   }
 
@@ -1697,6 +1754,7 @@ window.setInterval(() => {
 
 window.aivudaShell.getStartup().then((startup) => {
   defaultUrl = startup.defaultUrl || defaultUrl;
+  defaultScreenRecordingsDir = typeof startup.recordingsDir === "string" ? startup.recordingsDir : "";
   const savedState = normalizeSavedShellState(startup.savedState);
   if (savedState) {
     performanceOverlayVisible = savedState.performanceOverlayVisible;

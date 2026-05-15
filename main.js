@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
-const { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, screen, session, webContents } = require("electron");
+const { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, screen, session, shell, webContents } = require("electron");
 
 const DEFAULT_URL = "http://127.0.0.1:80";
 const APP_ICON_PATH = path.join(__dirname, "assets", "aivuda_icon.png");
@@ -688,6 +688,7 @@ function createMainWindow() {
 ipcMain.handle("aivuda-shell:get-startup", () => ({
   defaultUrl: DEFAULT_URL,
   initialUrl,
+  recordingsDir: getRecordingsDir(),
   savedState: readShellState(),
 }));
 
@@ -706,6 +707,37 @@ ipcMain.handle("aivuda-shell:save-shell-state", (_event, state) => {
     return { ok: true };
   } catch (error) {
     console.error("[aivuda-shell] failed to save shell state", error);
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle("aivuda-shell:open-path", async (_event, targetPath) => {
+  if (typeof targetPath !== "string" || !targetPath.trim()) {
+    return { ok: false, error: "Missing path to open." };
+  }
+
+  try {
+    const result = await shell.openPath(targetPath);
+    if (result) {
+      return { ok: false, error: result };
+    }
+    return { ok: true };
+  } catch (error) {
+    console.error("[aivuda-shell] failed to open path", error);
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle("aivuda-shell:show-item-in-folder", async (_event, targetPath) => {
+  if (typeof targetPath !== "string" || !targetPath.trim()) {
+    return { ok: false, error: "Missing path to reveal." };
+  }
+
+  try {
+    shell.showItemInFolder(targetPath);
+    return { ok: true };
+  } catch (error) {
+    console.error("[aivuda-shell] failed to show item in folder", error);
     return { ok: false, error: error.message };
   }
 });

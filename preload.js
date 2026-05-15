@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld("aivudaShell", {
   clearBrowserData: () => ipcRenderer.invoke("aivuda-shell:clear-browser-data"),
   getGpuStatus: () => ipcRenderer.invoke("aivuda-shell:get-gpu-status"),
   getStartup: () => ipcRenderer.invoke("aivuda-shell:get-startup"),
+  openPath: (targetPath) => ipcRenderer.invoke("aivuda-shell:open-path", targetPath),
+  showItemInFolder: (targetPath) => ipcRenderer.invoke("aivuda-shell:show-item-in-folder", targetPath),
   prepareWindowRecording: () => ipcRenderer.invoke("aivuda-shell:prepare-window-recording"),
   startFfmpegWindowRecording: () => ipcRenderer.invoke("aivuda-shell:start-ffmpeg-window-recording"),
   startFfmpegX11Recording: () => ipcRenderer.invoke("aivuda-shell:start-ffmpeg-x11-recording"),
