@@ -1,5 +1,7 @@
 # AivudaOS Electron Shell
 
+> Updated on Oct 5th, 2026: This project is deprecated!!! Please move to [ACEswarm](https://github.com/shupx/ACEswarm) for a better experience.
+
 This package provides a desktop shell for opening [AivudaOS](https://github.com/shupx/aivudaOS) and AivudaOS-hosted app panels in a dedicated Electron window on Ubuntu and other Linux desktops.
 
 It does not install or start AivudaOS itself. Start your AivudaOS services first, then launch the shell.
